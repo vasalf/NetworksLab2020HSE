@@ -2,6 +2,7 @@
 
 #include <iomanip>
 #include <sstream>
+#include <type_traits>
 
 namespace NChat {
 
@@ -22,6 +23,34 @@ std::string TMessage::Show() const {
        << Text_;
 
     return ss.str();
+}
+
+void TMessage::Serialize(TSocketWrapper& socket) const {
+    socket.Write(std::to_string(Text_.size() + 1) + "\n");
+    socket.Write(Author_ + "\n");
+    socket.Write(std::to_string(Accepted_) + "\n");
+    socket.Write(Text_ + "\n");
+}
+
+namespace {
+
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+T ToInt(const std::string& str) {
+    std::istringstream ss(str);
+    T ret;
+    ss >> ret;
+    return ret;
+}
+
+}
+
+TMessage ReadMessage(TSocketWrapper& socket) {
+    int textLength = ToInt<int>(socket.ReadUntil('\n'));
+    std::string author = socket.ReadUntil('\n');
+    std::time_t accepted = ToInt<std::time_t>(socket.ReadUntil('\n'));
+    std::string text = socket.ReadN(textLength);
+    text.pop_back();
+    return TMessage{author, accepted, text};
 }
 
 }

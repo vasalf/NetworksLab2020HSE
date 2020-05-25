@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Socket.h>
+
 #include <ctime>
 #include <string>
 
@@ -18,11 +20,14 @@ public:
     TMessage& operator=(TMessage&&) = default;
 
     std::string Show() const;
+    void Serialize(TSocketWrapper& socket) const;
 
 private:
     std::string Author_;
     std::time_t Accepted_;
     std::string Text_;
 };
+
+TMessage ReadMessage(TSocketWrapper& socket);
 
 }

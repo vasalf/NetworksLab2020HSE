@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
 #include <Message.h>
+#include <util/MockSocket.h>
 
 #include <ctime>
+#include <memory>
 
 
 TEST_CASE("TMessage::Show") {
@@ -42,4 +44,109 @@ TEST_CASE("TMessage::Show") {
     std::time_t time = std::mktime(&tm);
     NChat::TMessage message("Peter", time, "Hello!");
     CHECK(expected == message.Show());
+}
+
+TEST_CASE("TMessage::Serialize") {
+    std::unique_ptr<NChat::TGoodSocket> socket(new NChat::TGoodSocket(""));
+    NChat::TSocketWrapper wrapper(socket.get());
+    std::string expected;
+
+    SUBCASE("Hello!") {
+        expected = R"(7
+Alice
+0
+Hello!
+)";
+        NChat::TMessage {
+            "Alice",
+            static_cast<std::time_t>(0),
+            "Hello!"
+        }.Serialize(wrapper);
+    }
+
+    SUBCASE("Message with EOLs, name with spaces") {
+        expected = R"(18
+Robert Doe
+0
+Hi!
+How are you?
+
+)";
+        NChat::TMessage {
+            "Robert Doe",
+            static_cast<std::time_t>(0),
+            "Hi!\nHow are you?\n"
+        }.Serialize(wrapper);
+    }
+
+    CHECK(socket->GetAcceptedData() == expected);
+}
+
+TEST_CASE("ReadMessage") {
+    std::string serialized;
+    NChat::TMessage expected{"", static_cast<std::time_t>(0), ""};
+
+    SUBCASE("Hello!") {
+        expected = NChat::TMessage {
+            "Alice",
+            static_cast<std::time_t>(0),
+            "Hello!"
+        };
+        serialized = R"(7
+Alice
+0
+Hello!
+)";
+    }
+
+    SUBCASE("Message with EOLs, name with spaces") {
+        expected = NChat::TMessage {
+            "Robert Doe",
+            static_cast<std::time_t>(0),
+            "Hi!\nHow are you?\n"
+        };
+        serialized = R"(18
+Robert Doe
+0
+Hi!
+How are you?
+
+)";
+    }
+
+    std::unique_ptr<NChat::TGoodSocket> socket(new NChat::TGoodSocket(serialized));
+    NChat::TSocketWrapper wrapper(socket.get());
+    NChat::TMessage message = NChat::ReadMessage(wrapper);
+
+    CHECK(expected.Show() == message.Show());
+}
+
+TEST_CASE("Serialize/ReadMessage integration") {
+    NChat::TMessage message{"", static_cast<std::time_t>(0), ""};
+
+    SUBCASE("Hello!") {
+        message = NChat::TMessage {
+            "Alice!",
+            static_cast<std::time_t>(0),
+            "Hello!"
+        };
+    }
+
+    SUBCASE("Message with EOLs, name with spaces") {
+        message = NChat::TMessage {
+            "Robert Doe",
+            static_cast<std::time_t>(0),
+            "Hi!\nHow are you?\n"
+        };
+    }
+
+    std::unique_ptr<NChat::TGoodSocket> out(new NChat::TGoodSocket(""));
+    NChat::TSocketWrapper outWrapper(out.get());
+    message.Serialize(outWrapper);
+
+    std::unique_ptr<NChat::TGoodSocket> in(new NChat::TGoodSocket(out->GetAcceptedData()));
+    NChat::TSocketWrapper inWrapper(in.get());
+    auto actual = NChat::ReadMessage(inWrapper);
+
+    CHECK(message.Show() == actual.Show());
 }

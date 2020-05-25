@@ -13,9 +13,11 @@ target_include_directories(chat PUBLIC lib/)
 find_package(doctest REQUIRED)
 add_executable(tests
     test/Main.cpp
+    test/util/MockSocket.cpp
     test/Message.cpp
     test/Socket.cpp)
 target_include_directories(tests PUBLIC lib/)
+target_include_directories(tests PUBLIC test/)
 target_link_libraries(tests PUBLIC chat)
 
 include(CTest)
