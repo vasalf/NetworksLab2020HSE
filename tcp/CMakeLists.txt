@@ -5,8 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_library(chat STATIC
     lib/Message.cpp
-    lib/Socket.cpp)
+    lib/Socket.cpp
+    lib/Client.cpp)
 target_include_directories(chat PUBLIC lib/)
+target_link_libraries(chat pthread)
 
 
 # Tests
@@ -15,7 +17,8 @@ add_executable(tests
     test/Main.cpp
     test/util/MockSocket.cpp
     test/Message.cpp
-    test/Socket.cpp)
+    test/Socket.cpp
+    test/Client.cpp)
 target_include_directories(tests PUBLIC lib/)
 target_include_directories(tests PUBLIC test/)
 target_link_libraries(tests PUBLIC chat)

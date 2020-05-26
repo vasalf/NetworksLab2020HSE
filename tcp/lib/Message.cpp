@@ -44,8 +44,12 @@ T ToInt(const std::string& str) {
 
 }
 
-TMessage ReadMessage(TSocketWrapper& socket) {
-    int textLength = ToInt<int>(socket.ReadUntil('\n'));
+std::optional<TMessage> ReadMessage(TSocketWrapper& socket) {
+    auto start = socket.ReadUntil('\n');
+    if (start.empty()) {
+        return {};
+    }
+    int textLength = ToInt<int>(start);
     std::string author = socket.ReadUntil('\n');
     std::time_t accepted = ToInt<std::time_t>(socket.ReadUntil('\n'));
     std::string text = socket.ReadN(textLength);

@@ -3,6 +3,7 @@
 #include <Socket.h>
 
 #include <ctime>
+#include <optional>
 #include <string>
 
 namespace NChat {
@@ -28,6 +29,7 @@ private:
     std::string Text_;
 };
 
-TMessage ReadMessage(TSocketWrapper& socket);
+// Empty if the connection is closed.
+std::optional<TMessage> ReadMessage(TSocketWrapper& socket);
 
 }

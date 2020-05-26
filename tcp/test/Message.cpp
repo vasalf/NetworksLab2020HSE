@@ -116,9 +116,17 @@ How are you?
 
     std::unique_ptr<NChat::TGoodSocket> socket(new NChat::TGoodSocket(serialized));
     NChat::TSocketWrapper wrapper(socket.get());
-    NChat::TMessage message = NChat::ReadMessage(wrapper);
+    auto message = NChat::ReadMessage(wrapper);
 
-    CHECK(expected.Show() == message.Show());
+    CHECK(message.has_value());
+    CHECK(expected.Show() == message.value().Show());
+}
+
+TEST_CASE("ReadMessage from closed socket") {
+    std::unique_ptr<NChat::TGoodSocket> socket(new NChat::TGoodSocket(""));
+    NChat::TSocketWrapper wrapper(socket.get());
+    auto message = NChat::ReadMessage(wrapper);
+    CHECK(!message.has_value());
 }
 
 TEST_CASE("Serialize/ReadMessage integration") {
@@ -148,5 +156,6 @@ TEST_CASE("Serialize/ReadMessage integration") {
     NChat::TSocketWrapper inWrapper(in.get());
     auto actual = NChat::ReadMessage(inWrapper);
 
-    CHECK(message.Show() == actual.Show());
+    CHECK(actual.has_value());
+    CHECK(message.Show() == actual.value().Show());
 }
