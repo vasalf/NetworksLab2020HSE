@@ -26,6 +26,19 @@ public:
     virtual int Write(const char* data, int len) = 0;
 };
 
+// A real socket created from a file descriptor.
+class TFileDescriptorSocket : public ISocket {
+public:
+    TFileDescriptorSocket(int fd);
+    virtual ~TFileDescriptorSocket() = default;
+
+    virtual int Read(char* data, int len) override;
+    virtual int Write(const char* data, int len) override;
+
+private:
+    int FD_;
+};
+
 // A buffered wrapper for comfortable reading from a socket.
 // Does not own the wrapped socket.
 class TSocketWrapper {

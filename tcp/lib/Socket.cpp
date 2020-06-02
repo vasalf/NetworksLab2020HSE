@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include <unistd.h>
+
 namespace NChat {
 
 TSocketError::TSocketError(int errno)
@@ -12,6 +14,18 @@ TSocketError::TSocketError(int errno)
 
 int TSocketError::Errno() const {
     return Errno_;
+}
+
+TFileDescriptorSocket::TFileDescriptorSocket(int fd)
+    : FD_(fd)
+{}
+
+int TFileDescriptorSocket::Read(char* data, int len) {
+    return read(FD_, data, len);
+}
+
+int TFileDescriptorSocket::Write(const char* data, int len) {
+    return write(FD_, data, len);
 }
 
 TSocketWrapper::TSocketWrapper(ISocket* socket)
