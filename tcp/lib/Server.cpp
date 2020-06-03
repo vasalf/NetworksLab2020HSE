@@ -37,7 +37,7 @@ public:
 
     void Run() {
         InitAcceptingSocket();
-    
+
         /* Listen for incoming connections. */
         if (listen(AcceptinngSocketFD_, MAX_CONNECTIONS_QUEUED) < 0) {
             throw EServerNetworkError("Unable to listen socket");
@@ -45,13 +45,14 @@ public:
 
         while (true) {
             sockaddr_in clientSocketAddr;
-            socklen_t clientLength;
+            socklen_t clientLength = sizeof(clientSocketAddr);
             int clientFD = accept(
                 AcceptinngSocketFD_,
                 reinterpret_cast<sockaddr*>(&clientSocketAddr),
                 &clientLength
             );
-            if (clientFD <= 0) {
+            if (clientFD < 0) {
+                perror("accept");
                 throw EServerNetworkError("Accept failed");
             }
             Clients_.emplace_back(
