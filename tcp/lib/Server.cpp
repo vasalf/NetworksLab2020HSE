@@ -139,6 +139,9 @@ private:
             TSocketWrapper inWrapper(&client);
             auto message = ReadMessage(inWrapper);
             while (message.has_value()) {
+                std::time_t now;
+                std::time(&now);
+                message.value().UpdateTimestamp(now);
                 {
                     std::lock_guard<std::mutex> guard(MessagesLock_);
                     Messages_.emplace_back(message.value());

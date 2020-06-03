@@ -32,6 +32,10 @@ void TMessage::Serialize(TSocketWrapper& socket) const {
     socket.Write(Text_ + "\n");
 }
 
+void TMessage::UpdateTimestamp(const std::time_t& timestamp) {
+    Accepted_ = timestamp;
+}
+
 namespace {
 
 template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
