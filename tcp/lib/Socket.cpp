@@ -20,6 +20,10 @@ TFileDescriptorSocket::TFileDescriptorSocket(int fd)
     : FD_(fd)
 {}
 
+TFileDescriptorSocket::~TFileDescriptorSocket() {
+    close(FD_);
+}
+
 int TFileDescriptorSocket::Read(char* data, int len) {
     return read(FD_, data, len);
 }

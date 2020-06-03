@@ -6,14 +6,12 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <unistd.h>
 
-#include <condition_variable>
 #include <cstring>
-#include <future>
-#include <mutex>
-#include <stdexcept>
-#include <thread>
+#include <ctime>
+#include <memory>
 
 namespace NChat {
 
@@ -43,26 +41,30 @@ public:
             throw EServerNetworkError("Unable to listen socket");
         }
 
-        while (true) {
-            sockaddr_in clientSocketAddr;
-            socklen_t clientLength = sizeof(clientSocketAddr);
-            int clientFD = accept(
-                AcceptinngSocketFD_,
-                reinterpret_cast<sockaddr*>(&clientSocketAddr),
-                &clientLength
-            );
-            if (clientFD < 0) {
-                perror("accept");
-                throw EServerNetworkError("Accept failed");
+        pollFDs_.emplace_back(
+            pollfd {
+                .fd = AcceptinngSocketFD_,
+                .events = POLLIN
             }
-            Clients_.emplace_back(
-                std::async(
-                    std::launch::async,
-                    &TImpl::InteractWithClient,
-                    this,
-                    clientFD
-                )
-            );
+        );
+
+        while (true) {
+            int pollCount = poll(pollFDs_.data(), pollFDs_.size(), -1);
+
+            if (pollCount < 0) {
+                throw EServerNetworkError("Unable to poll");
+            }
+
+            for (int i = 0; i < (int)pollFDs_.size(); i++) {
+                if (!(pollFDs_[i].revents & POLLIN)) {
+                    continue;
+                }
+                if (pollFDs_[i].fd == AcceptinngSocketFD_) {
+                    AcceptClient();
+                } else {
+                    AcceptMessage(i);
+                }
+            }
         }
     }
 
@@ -107,54 +109,71 @@ private:
 
     int AcceptinngSocketFD_ = 0;
     sockaddr_in AcceptingSocketAddr_;
-    std::vector<std::future<void>> Clients_;
 
-    void InteractWithClient(int clientFD_) {
-        TFileDescriptorSocket client(clientFD_);
-        bool running = true;
-        std::thread outThread([this, &client, &running]() {
-            TSocketWrapper outWrapper(&client);
-            {
-                // Dump all messages before
-                std::lock_guard<std::mutex> guard(MessagesLock_);
-                for (const TMessage& message : Messages_) {
-                    message.Serialize(outWrapper);
-                }
+    void AcceptClient() {
+        sockaddr_storage clientAddr;
+        socklen_t clientAddrLength = sizeof(clientAddr);
+
+        int clientFD = accept(
+            AcceptinngSocketFD_,
+            reinterpret_cast<sockaddr*>(&clientAddr),
+            &clientAddrLength
+        );
+
+        if (clientFD < 0) {
+            throw EServerNetworkError("Unable to accept new client");
+        }
+
+        pollFDs_.emplace_back(
+            pollfd {
+                .fd = clientFD,
+                .events = POLLIN
             }
-            std::size_t position = Messages_.size();
-            while (running) {
-                std::unique_lock<std::mutex> guard(MessagesLock_);
-                NewMessages_.wait(
-                    guard,
-                    [this, &running, &position]() {
-                        return !running || position < Messages_.size();
-                    }
-                );
-                for (; position < Messages_.size(); position++) {
-                    Messages_[position].Serialize(outWrapper);
-                }
-            }
-        });
-        std::thread inThread([this, &client, &running]() {
-            TSocketWrapper inWrapper(&client);
-            auto message = ReadMessage(inWrapper);
-            while (message.has_value()) {
-                {
-                    std::lock_guard<std::mutex> guard(MessagesLock_);
-                    Messages_.emplace_back(message.value());
-                }
-                NewMessages_.notify_all();
-                message = ReadMessage(inWrapper);
-            }
-            running = false;
-            NewMessages_.notify_all();
-        });
-        inThread.join();
-        outThread.join();
+        );
+
+        clientSockets_.emplace_back(new TFileDescriptorSocket(clientFD));
+        clientWrappers_.emplace_back(clientSockets_.back().get());
+
+        for (const TMessage& message : Messages_) {
+            message.Serialize(clientWrappers_.back());
+        }
     }
 
-    std::mutex MessagesLock_;
-    std::condition_variable NewMessages_;
+    void AcceptMessage(int i) {
+        int sockId = i - 1;
+        std::optional<TMessage> maybeMessage = ReadMessage(clientWrappers_[sockId]);
+
+        if (!maybeMessage.has_value()) {
+            // Bye!
+
+            std::swap(clientWrappers_[sockId], clientWrappers_.back());
+            clientWrappers_.pop_back();
+
+            std::swap(clientSockets_[sockId], clientSockets_.back());
+            clientSockets_.pop_back();
+
+            std::swap(pollFDs_[i], pollFDs_.back());
+            pollFDs_.pop_back();
+
+            return;
+        }
+
+        TMessage message = maybeMessage.value();
+
+        std::time_t time;
+        std::time(&time);
+        message.UpdateTimestamp(time);
+
+        for (TSocketWrapper& client : clientWrappers_) {
+            message.Serialize(client);
+        }
+
+        Messages_.emplace_back(std::move(message));
+    }
+
+    std::vector<pollfd> pollFDs_;
+    std::vector<std::unique_ptr<ISocket>> clientSockets_;
+    std::vector<TSocketWrapper> clientWrappers_;
     std::vector<TMessage> Messages_;
 };
 

@@ -30,7 +30,7 @@ public:
 class TFileDescriptorSocket : public ISocket {
 public:
     TFileDescriptorSocket(int fd);
-    virtual ~TFileDescriptorSocket() = default;
+    virtual ~TFileDescriptorSocket();
 
     virtual int Read(char* data, int len) override;
     virtual int Write(const char* data, int len) override;

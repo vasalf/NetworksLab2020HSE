@@ -23,6 +23,8 @@ public:
     std::string Show() const;
     void Serialize(TSocketWrapper& socket) const;
 
+    void UpdateTimestamp(const std::time_t& timestamp);
+
 private:
     std::string Author_;
     std::time_t Accepted_;
