@@ -96,6 +96,10 @@ void TSocketWrapper::Write(const std::string& data) {
     }
 }
 
+bool TSocketWrapper::HasCachedInput() {
+    return BStart_ < (int)Buffer_.size();
+}
+
 void TSocketWrapper::ReadBuf() {
     BStart_ = 0;
     Buffer_.resize(BufSize);

@@ -55,6 +55,9 @@ public:
     // Write the given string
     void Write(const std::string& data);
 
+    // Return true if there is retrieved cached data left
+    bool HasCachedInput();
+
 private:
     static constexpr int BufSize = 256;
 

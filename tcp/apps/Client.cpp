@@ -5,6 +5,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/poll.h>
 #include <netdb.h>
 #include <unistd.h>
 
@@ -61,8 +62,36 @@ int main (int argc, char* argv[]) {
     }
 
     NChat::TFileDescriptorSocket serverSocket(fileDescriptor);
-    NChat::TClient client(&serverSocket, author, std::cin, std::cout);
-    client.Run();
+    NChat::TFileDescriptorSocket stdinSocket(STDIN_FILENO);
 
-    exit(0);
+    NChat::TClient client(&serverSocket, &stdinSocket, author, std::cout);
+
+    std::vector<pollfd> pollFDs {
+        pollfd {
+            .fd = fileDescriptor,
+            .events = POLLIN
+        },
+        pollfd {
+            .fd = STDIN_FILENO,
+            .events = POLLIN
+        }
+    };
+
+    while (true) {
+        int err = poll(pollFDs.data(), pollFDs.size(), -1);
+        if (err < 0) {
+            std::cerr << "Poll error" << std::endl;
+            return 1;
+        }
+        if (pollFDs[0].revents & POLLIN) {
+            if (!client.OnServerRead()) {
+                return 0;
+            }
+        }
+        if (pollFDs[1].revents & POLLIN) {
+            if (!client.OnStdinRead()) {
+                return 0;
+            }
+        }
+    }
 }

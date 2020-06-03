@@ -42,13 +42,15 @@ char TimeZone[] = "TZ=UTC-3";
 
 TEST_CASE("Client smoke test") {
     putenv(TimeZone);
-    std::istringstream in(UserInput);
     std::ostringstream out;
-    NChat::TGoodSocket socket(MessagesFromServer);
+    NChat::TGoodSocket netSocket(MessagesFromServer);
+    NChat::TGoodSocket stdinSocket(UserInput);
 
-    NChat::TClient client(&socket, "Alice", in, out, true);
-    client.Run();
+    NChat::TClient client(&netSocket, &stdinSocket, "Alice", out);
+
+    CHECK(true == client.OnServerRead());
+    CHECK(true == client.OnStdinRead());
 
     CHECK(ExpectedUserOutput == out.str());
-    CHECK(ExpectedServerOutput == socket.GetAcceptedData());
+    CHECK(ExpectedServerOutput == netSocket.GetAcceptedData());
 }

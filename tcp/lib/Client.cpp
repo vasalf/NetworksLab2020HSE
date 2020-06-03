@@ -4,91 +4,71 @@
 
 #include <iostream>
 
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-
 namespace NChat {
 
 class TClient::TImpl {
 public:
-    TImpl(ISocket* socket,
+    TImpl(ISocket* netSocket,
+          ISocket* stdinSocket,
           const std::string& author,
-          std::istream& in,
-          std::ostream& out,
-          bool joinThreads)
-        : Socket_(socket)
+          std::ostream& out)
+        : NetSocket_(netSocket)
+        , StdinSocket_(stdinSocket)
         , Author_(author)
-        , In_(in)
         , Out_(out)
-        , JoinThreads_(joinThreads)
     {}
 
     ~TImpl() = default;
 
-    void Run() {
-        std::thread userInput(
-            [this]() {
-                TSocketWrapper outWrapper(Socket_);
-                std::string s;
-                std::getline(In_, s);
-                while (!In_.eof()) {
-                    TMessage send {
-                        Author_,
-                        static_cast<std::time_t>(0),
-                        s
-                    };
-                    send.Serialize(outWrapper);
-                    std::getline(In_, s);
-                }
-                std::lock_guard<std::mutex> g(Lock_);
-                End_.notify_all();
+    bool OnServerRead() {
+        do {
+            auto message = ReadMessage(NetSocket_);
+            if (!message.has_value()) {
+                return false;
             }
-        );
-        std::thread userOutput(
-            [this]() {
-                TSocketWrapper inWrapper(Socket_);
-                auto message = ReadMessage(inWrapper);
-                while (message.has_value()) {
-                    Out_ << message.value().Show() << std::endl;
-                    message = ReadMessage(inWrapper);
-                }
-                std::lock_guard<std::mutex> g(Lock_);
-                End_.notify_all();
+            Out_ << message.value().Show() << std::endl;
+        } while (NetSocket_.HasCachedInput());
+        return true;
+    }
+
+    bool OnStdinRead() {
+        do {
+            auto text = StdinSocket_.ReadUntil('\n');
+            if (text.empty()) {
+                return false;
             }
-        );
-        std::unique_lock<std::mutex> g(Lock_);
-        End_.wait(g);
-        g.unlock();
-        if (JoinThreads_) {
-            userInput.join();
-            userOutput.join();
-        }
+            TMessage message (
+                Author_,
+                static_cast<std::time_t>(0),
+                text
+            );
+            message.Serialize(NetSocket_);
+        } while (StdinSocket_.HasCachedInput());
+        return true;
     }
 
 private:
-    ISocket* Socket_;
+    TSocketWrapper NetSocket_;
+    TSocketWrapper StdinSocket_;
     std::string Author_;
-    std::istream& In_;
     std::ostream& Out_;
-    bool JoinThreads_;
-
-    std::mutex Lock_;
-    std::condition_variable End_;
 };
 
-TClient::TClient(ISocket* socket,
+TClient::TClient(ISocket* netSocket,
+                 ISocket *stdinSocket,
                  const std::string& author,
-                 std::istream& in,
-                 std::ostream& out,
-                 bool joinThreads)
-    : Impl_(new TImpl(socket, author, in, out, joinThreads))
+                 std::ostream& out)
+    : Impl_(new TImpl(netSocket, stdinSocket, author, out))
 {}
 
 TClient::~TClient() = default;
 
-void TClient::Run() {
-    Impl_->Run();
+bool TClient::OnServerRead() {
+    return Impl_->OnServerRead();
+}
+
+bool TClient::OnStdinRead() {
+    return Impl_->OnStdinRead();
 }
 
 }
