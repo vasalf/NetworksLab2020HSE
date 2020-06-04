@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace NTFTP {
@@ -53,20 +55,18 @@ private:
 class TDataPacket : public IPacket {
 public:
     // Data is given encoded
-    TDataPacket(ETransferMode mode, std::uint16_t blockID, const std::string& data);
+    TDataPacket(std::uint16_t blockID, const std::string& data);
     ~TDataPacket() = default;
 
     virtual std::string ToBytes() const override;
     virtual void Accept(IPacketVisitor* visitor) const override;
 
-    ETransferMode Mode() const;
     std::uint16_t BlockID() const;
 
     // Encoded data
     const std::string& Data() const;
 
 private:
-    ETransferMode Mode_;
     std::uint16_t BlockID_;
     std::string Data_;
 };
@@ -95,7 +95,7 @@ public:
         ILLEGAL_OPCODE = 4,
         UNKNOWN_TRANSFER_ID = 5,
         FILE_EXISTS = 6,
-        NO_USER = 7, /** WTF?? */
+        NO_USER = 7, /* WTF?? */
     };
 
     // Message is given raw.
@@ -126,5 +126,19 @@ public:
     virtual void VisitAcknowledgePacket(const TAcknowledgePacket& packet) = 0;
     virtual void VisitErrorPacket(const TErrorPacket& packet) = 0;
 };
+
+class TParsePacketError : public std::runtime_error {
+public:
+    TParsePacketError(TErrorPacket::EType type, const std::string& message);
+
+    TErrorPacket::EType Type() const;
+    const std::string& Message() const;
+
+private:
+    TErrorPacket::EType Type_;
+    std::string Message_;
+};
+
+std::unique_ptr<IPacket> ParsePacket(const std::string& packet);
 
 }

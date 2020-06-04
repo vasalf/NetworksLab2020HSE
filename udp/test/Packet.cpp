@@ -149,11 +149,7 @@ TEST_CASE("TDataPacket::ToBytes") {
 
     SUBCASE("Some data") {
         packet.reset(
-            new NTFTP::TDataPacket(
-                NTFTP::ETransferMode::OCTET,
-                1,
-                "some data at the end"
-            )
+            new NTFTP::TDataPacket(1, "some data at the end")
         );
         expected.push_back('\0');
         expected += "\3";
@@ -163,11 +159,7 @@ TEST_CASE("TDataPacket::ToBytes") {
 
     SUBCASE("Data in netascii") {
         packet.reset(
-            new NTFTP::TDataPacket(
-                NTFTP::ETransferMode::NETASCII,
-                1,
-                "some data\r\n at the end"
-            )
+            new NTFTP::TDataPacket(1, "some data\r\n at the end")
         );
         expected.push_back('\0');
         expected += "\3";
@@ -240,4 +232,156 @@ TEST_CASE("TErrorPacket::ToBytes") {
     }
 
     CHECK(expected == packet->ToBytes());
+}
+
+namespace {
+
+class TPacketCheckerBase : public NTFTP::IPacketVisitor {
+public:
+    TPacketCheckerBase() = default;
+    virtual ~TPacketCheckerBase() = default;
+
+    virtual void VisitRequestPacket(const NTFTP::TRequestPacket&) override {
+        CHECK(false);
+    }
+
+    virtual void VisitDataPacket(const NTFTP::TDataPacket&) override {
+        CHECK(false);
+    }
+
+    virtual void VisitAcknowledgePacket(const NTFTP::TAcknowledgePacket&) override {
+        CHECK(false);
+    }
+
+    virtual void VisitErrorPacket(const NTFTP::TErrorPacket&) override {
+        CHECK(false);
+    }
+};
+
+class TRequestPacketChecker : public TPacketCheckerBase {
+public:
+    TRequestPacketChecker(const NTFTP::TRequestPacket& expected)
+        : Expected_(expected)
+    {}
+
+    TRequestPacketChecker() = default;
+
+    virtual void VisitRequestPacket(const NTFTP::TRequestPacket& actual) override {
+        CHECK(Expected_.Type() == actual.Type());
+        CHECK(Expected_.Filename() == actual.Filename());
+        CHECK(Expected_.Mode() == actual.Mode());
+    }
+
+private:
+    NTFTP::TRequestPacket Expected_;
+};
+
+class TDataPacketChecker : public TPacketCheckerBase {
+public:
+    TDataPacketChecker(const NTFTP::TDataPacket& expected)
+        : Expected_(expected)
+    {}
+
+    TDataPacketChecker() = default;
+
+    virtual void VisitDataPacket(const NTFTP::TDataPacket& actual) override {
+        CHECK(Expected_.BlockID() == actual.BlockID());
+        CHECK(Expected_.Data() == actual.Data());
+    }
+
+private:
+    NTFTP::TDataPacket Expected_;
+};
+
+class TAcknowledgePacketChecker : public TPacketCheckerBase {
+public:
+    TAcknowledgePacketChecker(const NTFTP::TAcknowledgePacket& expected)
+        : Expected_(expected)
+    {}
+
+    TAcknowledgePacketChecker() = default;
+
+    virtual void VisitAcknowledgePacket(const NTFTP::TAcknowledgePacket& actual) override {
+        CHECK(Expected_.BlockID() == actual.BlockID());
+    }
+
+private:
+    NTFTP::TAcknowledgePacket Expected_;
+};
+
+class TErrorPacketChecker : public TPacketCheckerBase {
+public:
+    TErrorPacketChecker(const NTFTP::TErrorPacket& expected)
+        : Expected_(expected)
+    {}
+
+    TErrorPacketChecker() = default;
+
+    virtual void VisitErrorPacket(const NTFTP::TErrorPacket& actual) override {
+        CHECK(Expected_.Type() == actual.Type());
+        CHECK(Expected_.Message() == actual.Message());
+    }
+
+private:
+    NTFTP::TErrorPacket Expected_;
+};
+
+}
+
+TEST_CASE("ParsePacket") {
+    std::unique_ptr<NTFTP::IPacket> packet;
+    std::unique_ptr<NTFTP::IPacketVisitor> checker;
+
+    SUBCASE("Read request") {
+        std::unique_ptr<NTFTP::TRequestPacket> rpacket(
+            new NTFTP::TRequestPacket(
+                NTFTP::TRequestPacket::EType::READ,
+                "file.txt",
+                NTFTP::ETransferMode::OCTET
+            )
+        );
+        checker.reset(new TRequestPacketChecker(*rpacket));
+        packet = std::move(rpacket);
+    }
+
+    SUBCASE("Write request") {
+        std::unique_ptr<NTFTP::TRequestPacket> rpacket(
+            new NTFTP::TRequestPacket(
+                NTFTP::TRequestPacket::EType::WRITE,
+                "file.txt",
+                NTFTP::ETransferMode::NETASCII
+            )
+        );
+        checker.reset(new TRequestPacketChecker(*rpacket));
+        packet = std::move(rpacket);
+    }
+
+    SUBCASE("Data") {
+        std::unique_ptr<NTFTP::TDataPacket> rpacket(
+            new NTFTP::TDataPacket(1, "some data at the end")
+        );
+        checker.reset(new TDataPacketChecker(*rpacket));
+        packet = std::move(rpacket);
+    }
+
+    SUBCASE("Acknowledge") {
+        std::unique_ptr<NTFTP::TAcknowledgePacket> rpacket(
+            new NTFTP::TAcknowledgePacket(1)
+        );
+        checker.reset(new TAcknowledgePacketChecker(*rpacket));
+        packet = std::move(rpacket);
+    }
+
+    SUBCASE("Error") {
+        std::unique_ptr<NTFTP::TErrorPacket> rpacket(
+            new NTFTP::TErrorPacket(
+                NTFTP::TErrorPacket::EType::UNKNOWN_TRANSFER_ID
+            )
+        );
+        checker.reset(new TErrorPacketChecker(*rpacket));
+        packet = std::move(rpacket);
+    }
+
+    std::string bytes = packet->ToBytes();
+    NTFTP::ParsePacket(bytes)->Accept(checker.get());
 }

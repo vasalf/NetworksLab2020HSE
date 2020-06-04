@@ -1,5 +1,8 @@
 #include <Packet.h>
 
+#include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <type_traits>
 
 namespace NTFTP {
@@ -59,6 +62,14 @@ std::string TransferMode(ETransferMode mode) {
     return "";
 }
 
+enum class EOpcode {
+    RRQ = 1,
+    WRQ = 2,
+    DATA = 3,
+    ACK = 4,
+    ERROR = 5
+};
+
 }
 
 TRequestPacket::TRequestPacket(TRequestPacket::EType type,
@@ -103,11 +114,9 @@ ETransferMode TRequestPacket::Mode() const {
     return Mode_;
 }
 
-TDataPacket::TDataPacket(ETransferMode mode,
-                         std::uint16_t blockID,
+TDataPacket::TDataPacket(std::uint16_t blockID,
                          const std::string& data)
-    : Mode_(mode)
-    , BlockID_(blockID)
+    : BlockID_(blockID)
     , Data_(data)
 {}
 
@@ -116,7 +125,7 @@ std::string TDataPacket::ToBytes() const {
     ret.reserve(4 + Data_.size());
 
     /* Opcode */
-    AppendIntegral<std::uint16_t>(ret, 3);
+    AppendIntegral(ret, static_cast<std::uint16_t>(EOpcode::DATA));
 
     /* Block id */
     AppendIntegral<std::uint16_t>(ret, BlockID_);
@@ -129,10 +138,6 @@ std::string TDataPacket::ToBytes() const {
 
 void TDataPacket::Accept(IPacketVisitor* visitor) const {
     visitor->VisitDataPacket(*this);
-}
-
-ETransferMode TDataPacket::Mode() const {
-    return Mode_;
 }
 
 std::uint16_t TDataPacket::BlockID() const {
@@ -152,7 +157,7 @@ std::string TAcknowledgePacket::ToBytes() const {
     ret.reserve(4);
 
     /* Opcode */
-    AppendIntegral<std::uint16_t>(ret, 4);
+    AppendIntegral(ret, static_cast<std::uint16_t>(EOpcode::ACK));
 
     /* Block id */
     AppendIntegral<std::uint16_t>(ret, BlockID_);
@@ -205,7 +210,7 @@ std::string TErrorPacket::ToBytes() const {
     ret.reserve(4 + Message_.size());
 
     /* Opcode */
-    AppendIntegral<std::uint16_t>(ret, 5);
+    AppendIntegral(ret, static_cast<std::uint16_t>(EOpcode::ERROR));
 
     /* Error code */
     AppendIntegral(ret, static_cast<std::uint16_t>(Type_));
@@ -227,6 +232,116 @@ TErrorPacket::EType TErrorPacket::Type() const {
 
 const std::string& TErrorPacket::Message() const {
     return Message_;
+}
+
+TParsePacketError::TParsePacketError(TErrorPacket::EType type, const std::string& message)
+    : std::runtime_error(message)
+    , Type_(type)
+    , Message_(message)
+{}
+
+TErrorPacket::EType TParsePacketError::Type() const {
+    return Type_;
+}
+
+const std::string& TParsePacketError::Message() const {
+    return Message_;
+}
+
+namespace {
+
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+T ReadIntegral(std::string_view& packet) {
+    T ret = 0;
+    T n = sizeof(T);
+    for (int i = 0; i < n; i++) {
+        if (packet.empty()) {
+            throw TParsePacketError(TErrorPacket::EType::UNDEFINED, "Packet is too short");
+        }
+        ret |= static_cast<T>(packet[0]) << 8 * (n - i - 1);
+        packet.remove_prefix(1);
+    }
+    return ret;
+}
+
+std::string_view ReadUntilZero(std::string_view& packet) {
+    std::size_t pos = std::min(packet.size(), packet.find('\0'));
+    std::string_view ret(packet.begin(), pos);
+    packet.remove_prefix(std::min(packet.size(), pos + 1));
+    return ret;
+}
+
+template<class T>
+std::string to_lower(T container) {
+    std::string ret;
+    ret.reserve(container.size());
+    std::transform(container.begin(), container.end(),
+                   std::back_inserter(ret),
+                   [](char c) { return std::tolower(c); });
+    return ret;
+}
+
+std::unique_ptr<IPacket> ParseRequest(const std::string& packet) {
+    std::string_view s(packet.c_str(), packet.length());
+
+    auto type = ReadIntegral<std::uint16_t>(s);
+    auto filename = ReadUntilZero(s);
+    auto modeStr = ReadUntilZero(s);
+
+    ETransferMode mode;
+    if (to_lower(modeStr) == "netascii") {
+        mode = ETransferMode::NETASCII;
+    } else if (to_lower(modeStr) == "octet") {
+        mode = ETransferMode::OCTET;
+    } else {
+        throw TParsePacketError(TErrorPacket::EType::UNDEFINED, "Illegal mode");
+    }
+
+    return std::make_unique<TRequestPacket>(
+        static_cast<TRequestPacket::EType>(type),
+        FromNetASCII(std::string(filename)),
+        mode
+    );
+}
+
+std::unique_ptr<IPacket> ParseData(std::string_view packet) {
+    auto blockID = ReadIntegral<std::uint16_t>(packet);
+    return std::make_unique<TDataPacket>(blockID, std::string(packet));
+}
+
+std::unique_ptr<IPacket> ParseAcknowledgement(std::string_view packet) {
+    return std::make_unique<TAcknowledgePacket>(ReadIntegral<std::uint16_t>(packet));
+}
+
+std::unique_ptr<IPacket> ParseError(std::string_view packet) {
+    auto errCode = ReadIntegral<std::uint16_t>(packet);
+    auto message = ReadUntilZero(packet);
+    return std::make_unique<TErrorPacket>(
+        static_cast<TErrorPacket::EType>(errCode),
+        FromNetASCII(std::string(message))
+    );
+}
+
+}
+
+std::unique_ptr<IPacket> ParsePacket(const std::string& packet) {
+    std::string_view s(packet.c_str(), packet.length());
+
+    auto opcode = ReadIntegral<std::uint16_t>(s);
+
+    switch (static_cast<EOpcode>(opcode)) {
+    case EOpcode::RRQ:
+    case EOpcode::WRQ:
+        return ParseRequest(packet);
+    case EOpcode::DATA:
+        return ParseData(s);
+    case EOpcode::ACK:
+        return ParseAcknowledgement(s);
+    case EOpcode::ERROR:
+        return ParseError(s);
+    }
+
+    throw TParsePacketError(TErrorPacket::EType::ILLEGAL_OPCODE, "");
 }
 
 }
