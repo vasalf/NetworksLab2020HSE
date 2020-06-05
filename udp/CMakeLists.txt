@@ -4,8 +4,16 @@ project(chat)
 set(CMAKE_CXX_STANDARD 17)
 
 add_library(tftp-packet STATIC
-    lib/Packet.cpp)
+    lib/Packet.cpp
+    lib/Client.cpp)
 target_include_directories(tftp-packet PUBLIC lib/)
+
+# Client
+add_executable(tftp-client
+    apps/Client.cpp)
+target_include_directories(tftp-client PUBLIC lib/)
+target_include_directories(tftp-client PUBLIC third_party/)
+target_link_libraries(tftp-client PUBLIC tftp-packet)
 
 # Tests
 find_package(doctest REQUIRED)
