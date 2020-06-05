@@ -77,6 +77,11 @@ public:
         return *ErrorAnswer_;
     }
 
+protected:
+    void SetErrorAnswer(TErrorPacket* packet) {
+        ErrorAnswer_.reset(packet);
+    }
+
 private:
     std::unique_ptr<TErrorPacket> ErrorRecvd_;
     std::unique_ptr<TErrorPacket> ErrorAnswer_;
@@ -99,6 +104,20 @@ public:
 
 private:
     std::unique_ptr<TDataPacket> DataReceived_;
+};
+
+class TWritePacketVisitor : public TExpectingPacketVisitorBase {
+public:
+    virtual void VisitAcknowledgePacket(const TAcknowledgePacket& answer) override {
+        BlockID_ = answer.BlockID();
+    }
+
+    std::uint16_t BlockID() const {
+        return BlockID_;
+    }
+
+private:
+    std::uint16_t BlockID_;
 };
 
 }
@@ -218,6 +237,101 @@ public:
     void Write(const std::string& filename,
                std::istream& data,
                ETransferMode mode) {
+        SockFDHolder socket { OpenSocket() };
+        auto serverReq = GetServerAddress();
+        std::unique_ptr<sockaddr> serverData;
+
+        {
+            // Write request
+            TRequestPacket request(
+                TRequestPacket::EType::WRITE,
+                filename,
+                ETransferMode::OCTET
+            );
+            SendPacket(socket.FD, serverReq, &request);
+
+            auto ack = ReceivePacket(socket.FD);
+            if (ack.ParseError.has_value()) {
+                TErrorPacket error(
+                    TErrorPacket::EType::ILLEGAL_OPCODE,
+                    ack.ParseError.value()
+                );
+                SendPacket(socket.FD, ack.From, &error);
+                throw TClientError("Illegal answer from server");
+            }
+            if (!ack.ReceivedPacket) {
+                // Timeout
+                throw TClientError("Timeout");
+            }
+            serverData.reset(new sockaddr(ack.From));
+
+            TWritePacketVisitor visitor;
+            ack.ReceivedPacket->Accept(&visitor);
+            if (visitor.ReceivedError()) {
+                throw TClientError("Server: " + visitor.GetReceivedError().Message());
+            }
+            if (visitor.AnswerError()) {
+                SendPacket(socket.FD, ack.From, &visitor.GetAnswerError());
+                throw TClientError("Client: " + visitor.GetAnswerError().Message());
+            }
+            if (visitor.BlockID() != 0) {
+                TErrorPacket error(
+                    TErrorPacket::EType::ILLEGAL_OPCODE,
+                    "Unexpected BlockID"
+                );
+                SendPacket(socket.FD, ack.From, &error);
+                throw TClientError("Unexpected BlockID in server answer");
+            }
+        }
+
+        bool end = false;
+        std::uint16_t blockID = 1;
+        while (!end) {
+            char block[512];
+            data.read(block, sizeof(block));
+            if (data.eof()) {
+                end = true;
+            }
+            TDataPacket packet(
+                blockID,
+                std::string(block, data.gcount())
+            );
+
+            SendPacket(socket.FD, *serverData, &packet);
+
+            bool receivedAck = false;
+            while (!receivedAck) {
+                auto ack = ReceivePacket(socket.FD);
+                if (ack.ParseError.has_value()) {
+                    TErrorPacket error(
+                        TErrorPacket::EType::ILLEGAL_OPCODE,
+                        ack.ParseError.value()
+                    );
+                    SendPacket(socket.FD, ack.From, &error);
+                    throw TClientError("Illegal answer from server");
+                }
+                if (!ack.ReceivedPacket) {
+                    // Timeout
+                    throw TClientError("Timeout");
+                }
+
+                TWritePacketVisitor visitor;
+                ack.ReceivedPacket->Accept(&visitor);
+                if (visitor.ReceivedError()) {
+                    throw TClientError("Server: " + visitor.GetReceivedError().Message());
+                }
+                if (visitor.AnswerError()) {
+                    SendPacket(socket.FD, ack.From, &visitor.GetAnswerError());
+                    throw TClientError("Client: " + visitor.GetAnswerError().Message());
+                }
+                receivedAck = true;
+                if (visitor.BlockID() != blockID) {
+                    receivedAck = false;
+                }
+            }
+
+            blockID++;
+        }
     }
 
 private:

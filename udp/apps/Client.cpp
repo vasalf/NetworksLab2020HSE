@@ -81,6 +81,16 @@ void Read(NTFTP::TClient& client, const std::string& filename) {
     }
 }
 
+void Write(NTFTP::TClient& client, const std::string& filename) {
+    std::ifstream in(filename, std::ios::binary);
+
+    try {
+        client.Write(filename, in);
+    } catch(NTFTP::TClientError& e) {
+        std::cerr << e.what() << std::endl;
+    }
+}
+
 int main(int argc, char* argv[]) {
     CLI::App app("Trivial FTP client");
 
@@ -120,9 +130,14 @@ int main(int argc, char* argv[]) {
         if (command == "help") {
             std::cout << "read FILENAME\tGet file from the server" << std::endl;
             std::cout << "get FILENAME\tGet file from the server" << std::endl;
+            std::cout << "write FILENAME\tPut file to the server" << std::endl;
+            std::cout << "put FILENAME\tPut file to the server" << std::endl;
         } else if (command == "read" || command == "get") {
             std::cin >> file;
             Read(client, file);
+        } else if (command == "write" || command == "put") {
+            std::cin >> file;
+            Write(client, file);
         } else {
             std::cerr << "Unknown command" << std::endl;
         }
