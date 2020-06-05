@@ -82,20 +82,23 @@ void Read(NTFTP::TClient& client, const std::string& filename) {
 }
 
 int main(int argc, char* argv[]) {
-    CLI::App app("TFTP client");
+    CLI::App app("Trivial FTP client");
 
     std::string hostname;
     app.add_option("hostname", hostname, "Server hostname")->required();
 
+    std::uint16_t port = 69;
+    app.add_option("-p,--port", port, "Server port, default: 69");
+
     int timeout = -1;
-    app.add_option("-t,--timeout", timeout, "Timeout (milliseconds), default = 2000");
+    app.add_option("-t,--timeout", timeout, "Timeout (milliseconds), default: 2000");
 
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose, "Print all packets");
 
     CLI11_PARSE(app, argc, argv);
 
-    NTFTP::TClient client(hostname);
+    NTFTP::TClient client(hostname, port);
     if (timeout > 0) {
         client.SetTimeout(timeout);
     }
@@ -108,13 +111,17 @@ int main(int argc, char* argv[]) {
         std::cout.flush();
 
         std::string command, file;
-        std::cin >> command >> file;
+        std::cin >> command;
 
         if (std::cin.eof()) {
             break;
         }
 
-        if (command == "read") {
+        if (command == "help") {
+            std::cout << "read FILENAME\tGet file from the server" << std::endl;
+            std::cout << "get FILENAME\tGet file from the server" << std::endl;
+        } else if (command == "read" || command == "get") {
+            std::cin >> file;
             Read(client, file);
         } else {
             std::cerr << "Unknown command" << std::endl;

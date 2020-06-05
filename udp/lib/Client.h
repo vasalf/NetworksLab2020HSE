@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -25,7 +26,7 @@ public:
 
 class TClient {
 public:
-    TClient(const std::string& host);
+    TClient(const std::string& host, std::uint16_t port = 69);
     ~TClient();
 
     void SetTimeout(int milliseconds);

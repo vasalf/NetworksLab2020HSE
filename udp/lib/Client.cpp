@@ -134,8 +134,9 @@ class TClient::TImpl {
     };
 
 public:
-    TImpl(const std::string& host)
+    TImpl(const std::string& host, std::uint16_t port)
         : Host_(host)
+        , Port_(port)
         , Rnd_(time(nullptr))
         , Logger_(new TIgnoreLogger())
     {}
@@ -151,7 +152,7 @@ public:
     void Read(const std::string& filename,
               std::ostream& to) {
         SockFDHolder socket { OpenSocket() };
-        auto serverReq = GetServerAddress(69);
+        auto serverReq = GetServerAddress();
         std::uint16_t serverPort = 0;
         bool end = false;
 
@@ -222,6 +223,7 @@ public:
 private:
     int Timeout_ = 2000; // Default timeout
     std::string Host_;
+    std::uint16_t Port_;
 
     int InitSocket() {
         int socketFD = socket(AF_INET, SOCK_DGRAM, 0);
@@ -277,8 +279,8 @@ private:
         return socketFD;
     }
 
-    sockaddr GetServerAddress(std::uint16_t serverPort) {
-        std::string portStr = std::to_string(serverPort);
+    sockaddr GetServerAddress() {
+        std::string portStr = std::to_string(Port_);
 
         addrinfo hints;
         hints.ai_family = AF_INET;
@@ -298,11 +300,11 @@ private:
             throw TClientError("Could not resolve host");
         }
 
-        auto ret = *addrs;
+        auto ret = *addrs->ai_addr;
 
         freeaddrinfo(addrs);
 
-        return *ret.ai_addr;
+        return ret;
     }
 
     void SendPacket(int sockFD, sockaddr& to, IPacket* packet) {
@@ -343,11 +345,10 @@ private:
         }
         try {
             ret.ReceivedPacket = ParsePacket(std::string(buf, err));
+            Logger_->OnReceive(ret.ReceivedPacket.get());
         } catch(TParsePacketError& e) {
             ret.ParseError = e.what();
         }
-
-        Logger_->OnReceive(ret.ReceivedPacket.get());
 
         return ret;
     }
@@ -356,8 +357,8 @@ private:
     std::unique_ptr<IClientLogger> Logger_;
 };
 
-TClient::TClient(const std::string& host)
-    : Impl_(new TImpl(host))
+TClient::TClient(const std::string& host, std::uint16_t port)
+    : Impl_(new TImpl(host, port))
 {}
 
 TClient::~TClient() = default;
