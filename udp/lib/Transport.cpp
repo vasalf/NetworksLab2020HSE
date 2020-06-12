@@ -18,6 +18,25 @@ TTransportError::TTransportError(const std::string& message)
     : std::runtime_error(message)
 {}
 
+struct TAddress::TImpl {
+    TImpl(sockaddr address, socklen_t length)
+        : Address(address)
+        , Length(length)
+    {}
+
+    sockaddr Address;
+    socklen_t Length;
+};
+
+TAddress::TAddress(std::unique_ptr<TImpl> impl)
+    : Impl(std::move(impl))
+{}
+
+TAddress::~TAddress() = default;
+
+TAddress::TAddress(TAddress&&) = default;
+TAddress& TAddress::operator=(TAddress&&) = default;
+
 namespace {
 
 class TVerboseLoggerPacketVisitor : public NTFTP::IPacketVisitor {
@@ -131,7 +150,8 @@ public:
     void Open() {
         InitSocket();
 
-        std::mt19937 rnd(std::time(nullptr));
+        std::random_device rd;
+        std::mt19937 rnd(rd());
         std::uniform_int_distribution<std::uint16_t> dist(
             1024,
             std::numeric_limits<std::uint16_t>::max()
@@ -147,6 +167,15 @@ public:
         auto to = ResolveAddress(host, port);
         std::string data = packet->ToBytes();
         int error = sendto(SockFD_, data.c_str(), data.length(), 0, &to, sizeof(to));
+        if (error < 0) {
+            throw TTransportError("Unable to send packet");
+        }
+        Logger_->OnSend(packet);
+    }
+
+    void Send(const TAddress& to, IPacket* packet) {
+        std::string data = packet->ToBytes();
+        int error = sendto(SockFD_, data.c_str(), data.length(), 0, &to.Impl->Address, to.Impl->Length);
         if (error < 0) {
             throw TTransportError("Unable to send packet");
         }
@@ -170,12 +199,14 @@ public:
             reinterpret_cast<sockaddr_in*>(&from)->sin_port
         );
 
+        TAddress addr { std::make_unique<TAddress::TImpl>(from, fromLength) };
+
         try {
             auto packet = ParsePacket(std::string(buf, error));
             Logger_->OnReceive(packet.get());
-            return TReceiveResult{transferID, std::move(packet)};
+            return TReceiveResult{std::move(addr), transferID, std::move(packet)};
         } catch(TParsePacketError& error) {
-            return TReceiveResult{transferID, error};
+            return TReceiveResult{std::move(addr), transferID, error};
         }
     }
 
@@ -249,6 +280,9 @@ TTransport::TTransport()
 
 TTransport::~TTransport() = default;
 
+TTransport::TTransport(TTransport&&) = default;
+TTransport& TTransport::operator=(TTransport&&) = default;
+
 void TTransport::SetLogger(std::shared_ptr<ITransportLogger> logger) {
     Impl_->SetLogger(std::move(logger));
 }
@@ -263,6 +297,10 @@ void TTransport::Open() {
 
 void TTransport::Send(std::string host, std::uint16_t port, IPacket* packet) {
     Impl_->Send(host, port, packet);
+}
+
+void TTransport::Send(const TAddress& address, IPacket* packet) {
+    Impl_->Send(address, packet);
 }
 
 int TTransport::PollFD() {

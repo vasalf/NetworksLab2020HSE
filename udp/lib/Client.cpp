@@ -1,12 +1,5 @@
 #include <Client.h>
 
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/poll.h>
-#include <netdb.h>
-#include <unistd.h>
-
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -15,6 +8,8 @@
 #include <optional>
 #include <random>
 
+#include <sys/poll.h>
+
 namespace NTFTP {
 
 TClientError::TClientError(std::string message)
@@ -22,61 +17,6 @@ TClientError::TClientError(std::string message)
 {}
 
 namespace {
-
-class TExpectingPacketVisitorBase : public IPacketVisitor {
-public:
-    TExpectingPacketVisitorBase() = default;
-    virtual ~TExpectingPacketVisitorBase() = default;
-
-    virtual void VisitRequestPacket(const TRequestPacket&) override {
-        ErrorAnswer_.reset(
-            new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
-        );
-    }
-
-    virtual void VisitDataPacket(const TDataPacket&) override {
-        ErrorAnswer_.reset(
-            new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
-        );
-    }
-
-    virtual void VisitAcknowledgePacket(const TAcknowledgePacket&) override {
-        ErrorAnswer_.reset(
-            new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
-        );
-    }
-
-    virtual void VisitErrorPacket(const TErrorPacket& error) override {
-        ErrorRecvd_.reset(
-            new TErrorPacket(error)
-        );
-    }
-
-    bool ReceivedError() const {
-        return (bool)ErrorRecvd_;
-    }
-
-    TErrorPacket& GetReceivedError() {
-        return *ErrorRecvd_;
-    }
-
-    bool AnswerError() const {
-        return (bool)ErrorAnswer_;
-    }
-
-    TErrorPacket& GetAnswerError() {
-        return *ErrorAnswer_;
-    }
-
-protected:
-    void SetErrorAnswer(TErrorPacket* packet) {
-        ErrorAnswer_.reset(packet);
-    }
-
-private:
-    std::unique_ptr<TErrorPacket> ErrorRecvd_;
-    std::unique_ptr<TErrorPacket> ErrorAnswer_;
-};
 
 class TReadPacketVisitor : public TExpectingPacketVisitorBase {
 public:
@@ -114,35 +54,6 @@ private:
 }
 
 class TClient::TImpl {
-    // Automatically close socket on exception.
-    struct SockFDHolder {
-        int FD = -1;
-
-        SockFDHolder() {}
-
-        SockFDHolder(int fd)
-            : FD(fd)
-        {}
-
-        SockFDHolder(const SockFDHolder&) = delete;
-        SockFDHolder& operator=(const SockFDHolder&) = delete;
-
-        SockFDHolder(SockFDHolder&& from) {
-            std::swap(FD, from.FD);
-        }
-
-        SockFDHolder& operator=(SockFDHolder&& from) {
-            std::swap(FD, from.FD);
-            return *this;
-        }
-
-        ~SockFDHolder() {
-            if (FD >= 0) {
-                close(FD);
-            }
-        }
-    };
-
 public:
     TImpl(const std::string& host, std::uint16_t port)
         : Host_(host)

@@ -127,6 +127,30 @@ public:
     virtual void VisitErrorPacket(const TErrorPacket& packet) = 0;
 };
 
+class TExpectingPacketVisitorBase : public IPacketVisitor {
+public:
+    TExpectingPacketVisitorBase() = default;
+    virtual ~TExpectingPacketVisitorBase() = default;
+
+    virtual void VisitRequestPacket(const TRequestPacket&) override;
+    virtual void VisitDataPacket(const TDataPacket&) override;
+    virtual void VisitAcknowledgePacket(const TAcknowledgePacket&) override;
+    virtual void VisitErrorPacket(const TErrorPacket& error) override;
+
+    bool ReceivedError() const;
+    TErrorPacket& GetReceivedError();
+
+    bool AnswerError() const;
+    TErrorPacket& GetAnswerError();
+
+protected:
+    void SetErrorAnswer(TErrorPacket* packet);
+
+private:
+    std::unique_ptr<TErrorPacket> ErrorRecvd_;
+    std::unique_ptr<TErrorPacket> ErrorAnswer_;
+};
+
 class TParsePacketError : public std::runtime_error {
 public:
     TParsePacketError(TErrorPacket::EType type, const std::string& message);

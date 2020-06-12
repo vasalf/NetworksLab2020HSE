@@ -184,7 +184,7 @@ std::string DefaultErrorMessage(TErrorPacket::EType errorType) {
     case TErrorPacket::EType::DISK_FULL:
         return "Disk full or allocation exceeded";
     case TErrorPacket::EType::ILLEGAL_OPCODE:
-        return "Illegal TFTP opetaion";
+        return "Illegal TFTP operation";
     case TErrorPacket::EType::UNKNOWN_TRANSFER_ID:
         return "Unknown transfer ID";
     case TErrorPacket::EType::FILE_EXISTS:
@@ -246,6 +246,50 @@ TErrorPacket::EType TParsePacketError::Type() const {
 
 const std::string& TParsePacketError::Message() const {
     return Message_;
+}
+
+void TExpectingPacketVisitorBase::VisitRequestPacket(const TRequestPacket&) {
+    ErrorAnswer_.reset(
+        new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
+    );
+}
+
+void TExpectingPacketVisitorBase::VisitDataPacket(const TDataPacket&) {
+    ErrorAnswer_.reset(
+        new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
+    );
+}
+
+void TExpectingPacketVisitorBase::VisitAcknowledgePacket(const TAcknowledgePacket&) {
+    ErrorAnswer_.reset(
+        new TErrorPacket(TErrorPacket::EType::ILLEGAL_OPCODE)
+    );
+}
+
+void TExpectingPacketVisitorBase::VisitErrorPacket(const TErrorPacket& error) {
+    ErrorRecvd_.reset(
+        new TErrorPacket(error)
+    );
+}
+
+bool TExpectingPacketVisitorBase::ReceivedError() const {
+    return (bool)ErrorRecvd_;
+}
+
+TErrorPacket& TExpectingPacketVisitorBase::GetReceivedError() {
+    return *ErrorRecvd_;
+}
+
+bool TExpectingPacketVisitorBase::AnswerError() const {
+    return (bool)ErrorAnswer_;
+}
+
+TErrorPacket& TExpectingPacketVisitorBase::GetAnswerError() {
+    return *ErrorAnswer_;
+}
+
+void TExpectingPacketVisitorBase::SetErrorAnswer(TErrorPacket* packet) {
+    ErrorAnswer_.reset(packet);
 }
 
 namespace {

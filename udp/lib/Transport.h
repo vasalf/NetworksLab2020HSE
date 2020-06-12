@@ -36,6 +36,20 @@ private:
     std::ostream& Out_;
 };
 
+struct TAddress {
+    struct TImpl;
+
+    TAddress(std::unique_ptr<TImpl>);
+    ~TAddress();
+
+    TAddress(const TAddress&) = delete;
+    TAddress& operator=(const TAddress&) = delete;
+    TAddress(TAddress&&);
+    TAddress& operator=(TAddress&&);
+
+    std::unique_ptr<TImpl> Impl;
+};
+
 class TTransport {
 public:
     TTransport();
@@ -43,8 +57,8 @@ public:
 
     TTransport(const TTransport&) = delete;
     TTransport& operator=(const TTransport&) = delete;
-    TTransport(TTransport&&) = default;
-    TTransport& operator=(TTransport&&) = default;
+    TTransport(TTransport&&);
+    TTransport& operator=(TTransport&&);
 
     void SetLogger(std::shared_ptr<ITransportLogger> logger);
 
@@ -54,11 +68,13 @@ public:
     void Open();
 
     void Send(std::string host, std::uint16_t port, IPacket* packet);
+    void Send(const TAddress& to, IPacket* packet);
 
     // File descriptor for polling
     int PollFD();
 
     struct TReceiveResult {
+        TAddress From;
         std::uint16_t TransferID;
         std::variant<std::unique_ptr<IPacket>, TParsePacketError> Packet;
     };
