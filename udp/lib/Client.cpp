@@ -23,15 +23,6 @@ TClientError::TClientError(std::string message)
 
 namespace {
 
-class TIgnoreLogger : public IClientLogger {
-public:
-    TIgnoreLogger() = default;
-    virtual ~TIgnoreLogger() = default;
-
-    virtual void OnSend(IPacket*) override {}
-    virtual void OnReceive(IPacket*) override {}
-};
-
 class TExpectingPacketVisitorBase : public IPacketVisitor {
 public:
     TExpectingPacketVisitorBase() = default;
@@ -156,22 +147,25 @@ public:
     TImpl(const std::string& host, std::uint16_t port)
         : Host_(host)
         , Port_(port)
-        , Rnd_(time(nullptr))
-        , Logger_(new TIgnoreLogger())
+        , Logger_(nullptr)
     {}
 
     void SetTimeout(int milliseconds) {
         Timeout_ = milliseconds;
     }
 
-    void SetLogger(std::unique_ptr<IClientLogger>&& logger) {
+    void SetLogger(std::shared_ptr<ITransportLogger> logger) {
         Logger_ = std::move(logger);
     }
 
     void Read(const std::string& filename,
               std::ostream& to) {
-        SockFDHolder socket { OpenSocket() };
-        auto serverReq = GetServerAddress();
+        TTransport transport;
+        if (Logger_) {
+            transport.SetLogger(Logger_);
+        }
+        transport.Open();
+
         std::uint16_t serverPort = 0;
         bool end = false;
 
@@ -182,42 +176,37 @@ public:
                 filename,
                 ETransferMode::OCTET
             );
-            SendPacket(socket.FD, serverReq, &request);
+            transport.Send(Host_, Port_, &request);
         }
         std::size_t blockID = 1;
 
         while (!end) {
-            auto inPacket = ReceivePacket(socket.FD);
-            if (inPacket.ParseError.has_value()) {
+            auto packet = ReceivePacket(transport);
+            if (std::holds_alternative<TParsePacketError>(packet.Packet)) {
                 TErrorPacket error(
                     TErrorPacket::EType::ILLEGAL_OPCODE,
-                    inPacket.ParseError.value()
+                    std::get<TParsePacketError>(packet.Packet).what()
                 );
-                SendPacket(socket.FD, inPacket.From, &error);
+                transport.Send(Host_, packet.TransferID, &error);
                 throw TClientError("Illegal answer from server");
             }
-            if (!inPacket.ReceivedPacket) {
-                throw TClientError("Timeout");
-            }
-            auto serverAnswerPort = ntohs(
-                reinterpret_cast<sockaddr_in*>(&inPacket.From)->sin_port
-            );
+            auto serverAnswerPort = packet.TransferID;
             if (serverPort == 0) {
                 serverPort = serverAnswerPort;
             } else if (serverPort != serverAnswerPort) {
                 // Duplicate connection silently dropped as described in RFC 1350.
                 TErrorPacket error(TErrorPacket::EType::UNKNOWN_TRANSFER_ID);
-                SendPacket(socket.FD, inPacket.From, &error);
+                transport.Send(Host_, serverAnswerPort, &error);
                 continue;
             }
 
             TReadPacketVisitor visitor;
-            inPacket.ReceivedPacket->Accept(&visitor);
+            std::get<std::unique_ptr<IPacket>>(packet.Packet)->Accept(&visitor);
             if (visitor.ReceivedError()) {
                 throw TClientError("Server: " + visitor.GetReceivedError().Message());
             }
             if (visitor.AnswerError()) {
-                SendPacket(socket.FD, inPacket.From, &visitor.GetAnswerError());
+                transport.Send(Host_, serverPort, &visitor.GetAnswerError());
                 throw TClientError("Client: " + visitor.GetAnswerError().Message());
             }
             if (visitor.DataReceived().BlockID() != blockID) {
@@ -228,7 +217,7 @@ public:
             to << visitor.DataReceived().Data();
 
             TAcknowledgePacket answer(blockID);
-            SendPacket(socket.FD, inPacket.From, &answer);
+            transport.Send(Host_, serverPort, &answer);
 
             ++blockID;
         }
@@ -236,10 +225,14 @@ public:
 
     void Write(const std::string& filename,
                std::istream& data,
-               ETransferMode mode) {
-        SockFDHolder socket { OpenSocket() };
-        auto serverReq = GetServerAddress();
-        std::unique_ptr<sockaddr> serverData;
+               ETransferMode) {
+        TTransport transport;
+        if (Logger_) {
+            transport.SetLogger(Logger_);
+        }
+        transport.Open();
+
+        std::uint16_t transferID;
 
         {
             // Write request
@@ -248,30 +241,26 @@ public:
                 filename,
                 ETransferMode::OCTET
             );
-            SendPacket(socket.FD, serverReq, &request);
+            transport.Send(Host_, Port_, &request);
 
-            auto ack = ReceivePacket(socket.FD);
-            if (ack.ParseError.has_value()) {
+            auto ack = ReceivePacket(transport);
+            if (std::holds_alternative<TParsePacketError>(ack.Packet)) {
                 TErrorPacket error(
                     TErrorPacket::EType::ILLEGAL_OPCODE,
-                    ack.ParseError.value()
+                    std::get<TParsePacketError>(ack.Packet).what()
                 );
-                SendPacket(socket.FD, ack.From, &error);
+                transport.Send(Host_, ack.TransferID, &error);
                 throw TClientError("Illegal answer from server");
             }
-            if (!ack.ReceivedPacket) {
-                // Timeout
-                throw TClientError("Timeout");
-            }
-            serverData.reset(new sockaddr(ack.From));
+            transferID = ack.TransferID;
 
             TWritePacketVisitor visitor;
-            ack.ReceivedPacket->Accept(&visitor);
+            std::get<std::unique_ptr<IPacket>>(ack.Packet)->Accept(&visitor);
             if (visitor.ReceivedError()) {
                 throw TClientError("Server: " + visitor.GetReceivedError().Message());
             }
             if (visitor.AnswerError()) {
-                SendPacket(socket.FD, ack.From, &visitor.GetAnswerError());
+                transport.Send(Host_, transferID, &visitor.GetAnswerError());
                 throw TClientError("Client: " + visitor.GetAnswerError().Message());
             }
             if (visitor.BlockID() != 0) {
@@ -279,7 +268,7 @@ public:
                     TErrorPacket::EType::ILLEGAL_OPCODE,
                     "Unexpected BlockID"
                 );
-                SendPacket(socket.FD, ack.From, &error);
+                transport.Send(Host_, transferID, &error);
                 throw TClientError("Unexpected BlockID in server answer");
             }
         }
@@ -297,31 +286,27 @@ public:
                 std::string(block, data.gcount())
             );
 
-            SendPacket(socket.FD, *serverData, &packet);
+            transport.Send(Host_, transferID, &packet);
 
             bool receivedAck = false;
             while (!receivedAck) {
-                auto ack = ReceivePacket(socket.FD);
-                if (ack.ParseError.has_value()) {
+                auto ack = ReceivePacket(transport);
+                if (std::holds_alternative<TParsePacketError>(ack.Packet)) {
                     TErrorPacket error(
                         TErrorPacket::EType::ILLEGAL_OPCODE,
-                        ack.ParseError.value()
+                        std::get<TParsePacketError>(ack.Packet).what()
                     );
-                    SendPacket(socket.FD, ack.From, &error);
+                    transport.Send(Host_, transferID, &error);
                     throw TClientError("Illegal answer from server");
-                }
-                if (!ack.ReceivedPacket) {
-                    // Timeout
-                    throw TClientError("Timeout");
                 }
 
                 TWritePacketVisitor visitor;
-                ack.ReceivedPacket->Accept(&visitor);
+                std::get<std::unique_ptr<IPacket>>(ack.Packet)->Accept(&visitor);
                 if (visitor.ReceivedError()) {
                     throw TClientError("Server: " + visitor.GetReceivedError().Message());
                 }
                 if (visitor.AnswerError()) {
-                    SendPacket(socket.FD, ack.From, &visitor.GetAnswerError());
+                    transport.Send(Host_, transferID, &visitor.GetAnswerError());
                     throw TClientError("Client: " + visitor.GetAnswerError().Message());
                 }
                 receivedAck = true;
@@ -338,137 +323,28 @@ private:
     int Timeout_ = 2000; // Default timeout
     std::string Host_;
     std::uint16_t Port_;
+    std::shared_ptr<ITransportLogger> Logger_;
 
-    int InitSocket() {
-        int socketFD = socket(AF_INET, SOCK_DGRAM, 0);
-        if (socketFD < 0) {
-            throw TClientError("Unable to create socket");
-        }
-
-        int opt = 1;
-        int error = setsockopt(
-            socketFD,
-            SOL_SOCKET,
-            SO_REUSEADDR | SO_REUSEPORT,
-            &opt,
-            sizeof(int)
-        );
-        if (error < 0) {
-            throw TClientError("Unable to set socket options");
-        }
-
-        return socketFD;
-    }
-
-    std::uint16_t BindPort(int socketFD) {
-        std::uniform_int_distribution<std::uint16_t> dist(
-            1024,
-            std::numeric_limits<std::uint16_t>::max()
-        );
-
-        sockaddr_in clientAddr;
-        clientAddr.sin_family = AF_INET;
-        clientAddr.sin_addr.s_addr = INADDR_ANY;
-
-        int error;
-        std::uint16_t port;
-
-        do {
-            port = dist(Rnd_);
-            clientAddr.sin_port = htons(port);
-
-            error = bind(
-                socketFD,
-                reinterpret_cast<sockaddr*>(&clientAddr),
-                sizeof(clientAddr)
-            );
-        } while (error < 0);
-
-        return port;
-    }
-
-    int OpenSocket() {
-        int socketFD = InitSocket();
-        BindPort(socketFD);
-        return socketFD;
-    }
-
-    sockaddr GetServerAddress() {
-        std::string portStr = std::to_string(Port_);
-
-        addrinfo hints;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_protocol = IPPROTO_UDP;
-        hints.ai_flags = 0;
-
-        addrinfo* addrs;
-        int error = getaddrinfo(
-            Host_.c_str(),
-            portStr.c_str(),
-            &hints,
-            &addrs
-        );
-
-        if (error < 0 || !addrs) {
-            throw TClientError("Could not resolve host");
-        }
-
-        auto ret = *addrs->ai_addr;
-
-        freeaddrinfo(addrs);
-
-        return ret;
-    }
-
-    void SendPacket(int sockFD, sockaddr& to, IPacket* packet) {
-        std::string data = packet->ToBytes();
-        int error = sendto(sockFD, data.c_str(), data.length(), 0, &to, sizeof(to));
-        if (error < 0) {
-            throw TClientError("Couldn't send packet");
-        }
-        Logger_->OnSend(packet);
-    }
-
-    struct InPacket {
-        sockaddr From;
-        socklen_t FromLength = sizeof(sockaddr);
-        std::unique_ptr<IPacket> ReceivedPacket = nullptr;
-        std::optional<std::string> ParseError;
-    };
-
-    InPacket ReceivePacket(int sockFD) {
-        InPacket ret;
-
+    TTransport::TReceiveResult ReceivePacket(TTransport& transport) {
         pollfd listen {
-            .fd = sockFD,
+            .fd = transport.PollFD(),
             .events = POLLIN
         };
-        int err = poll(&listen, 1, Timeout_);
-        if (err < 0) {
-            throw TClientError("Poll error");
+
+        int error = poll(&listen, 1, Timeout_);
+        if (error < 0) {
+            throw TClientError("Unable to poll");
         }
-        if (err == 0) {
-            return ret;
+        if (error == 0) {
+            throw TClientError("Timeout");
         }
 
-        char buf[520];
-        err = recvfrom(sockFD, buf, sizeof(buf), 0, &ret.From, &ret.FromLength);
-        if (err < 0) {
-            throw TClientError("Couldn't read from socket");
+        auto ret = transport.Receive();
+        if (!ret.has_value()) {
+            throw TClientError("Timeout");
         }
-        try {
-            ret.ReceivedPacket = ParsePacket(std::string(buf, err));
-            Logger_->OnReceive(ret.ReceivedPacket.get());
-        } catch(TParsePacketError& e) {
-            ret.ParseError = e.what();
-        }
-
-        return ret;
+        return std::move(ret.value());
     }
-
-    std::mt19937 Rnd_;
-    std::unique_ptr<IClientLogger> Logger_;
 };
 
 TClient::TClient(const std::string& host, std::uint16_t port)
@@ -481,7 +357,7 @@ void TClient::SetTimeout(int milliseconds) {
     Impl_->SetTimeout(milliseconds);
 }
 
-void TClient::SetLogger(std::unique_ptr<IClientLogger>&& logger) {
+void TClient::SetLogger(std::shared_ptr<ITransportLogger> logger) {
     Impl_->SetLogger(std::move(logger));
 }
 

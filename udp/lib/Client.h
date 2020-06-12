@@ -7,21 +7,13 @@
 #include <stdexcept>
 
 #include <Packet.h>
+#include <Transport.h>
 
 namespace NTFTP {
 
 class TClientError : public std::runtime_error {
 public:
     TClientError(std::string message);
-};
-
-class IClientLogger {
-public:
-    IClientLogger() = default;
-    virtual ~IClientLogger() = default;
-
-    virtual void OnSend(IPacket* packet) = 0;
-    virtual void OnReceive(IPacket* packet) = 0;
 };
 
 class TClient {
@@ -31,7 +23,7 @@ public:
 
     void SetTimeout(int milliseconds);
 
-    void SetLogger(std::unique_ptr<IClientLogger>&& logger);
+    void SetLogger(std::shared_ptr<ITransportLogger> logger);
 
     void Read(const std::string& filename,
               std::ostream& to);

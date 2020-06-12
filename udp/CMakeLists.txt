@@ -5,7 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_library(tftp-packet STATIC
     lib/Packet.cpp
-    lib/Client.cpp)
+    lib/Client.cpp
+    lib/Transport.cpp)
 target_include_directories(tftp-packet PUBLIC lib/)
 
 # Client
