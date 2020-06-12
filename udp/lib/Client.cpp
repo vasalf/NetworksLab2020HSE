@@ -223,9 +223,7 @@ public:
         }
     }
 
-    void Write(const std::string& filename,
-               std::istream& data,
-               ETransferMode) {
+    void Write(const std::string& filename, std::istream& data) {
         TTransport transport;
         if (Logger_) {
             transport.SetLogger(Logger_);
@@ -365,8 +363,8 @@ void TClient::Read(const std::string& filename, std::ostream& to) {
     Impl_->Read(filename, to);
 }
 
-void TClient::Write(const std::string& filename, std::istream& data, ETransferMode mode) {
-    Impl_->Write(filename, data, mode);
+void TClient::Write(const std::string& filename, std::istream& data) {
+    Impl_->Write(filename, data);
 }
 
 }

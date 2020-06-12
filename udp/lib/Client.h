@@ -25,12 +25,10 @@ public:
 
     void SetLogger(std::shared_ptr<ITransportLogger> logger);
 
-    void Read(const std::string& filename,
-              std::ostream& to);
+    void Read(const std::string& filename, std::ostream& to);
 
-    void Write(const std::string& filename,
-               std::istream& data,
-               ETransferMode mode = ETransferMode::OCTET);
+    void Write(const std::string& filename, std::istream& data);
+
 
 private:
     class TImpl;
