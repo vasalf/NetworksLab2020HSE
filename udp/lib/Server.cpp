@@ -1,5 +1,6 @@
 #include <Server.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -14,6 +15,9 @@ TServerError::TServerError(const std::string& message)
 
 namespace {
 
+using TTimePoint = std::chrono::steady_clock::time_point;
+using TDuration = std::chrono::steady_clock::duration;
+
 class IClient {
 public:
     IClient(TAddress&& address, TTransport&& transport, std::ostream& error)
@@ -21,6 +25,8 @@ public:
         , Transport(std::move(transport))
         , Error(error)
     {}
+
+    virtual ~IClient() = default;
 
     bool HandlePacket(TTransport::TReceiveResult&& packet) {
         if (std::holds_alternative<TParsePacketError>(packet.Packet)) {
@@ -40,6 +46,10 @@ public:
         return Transport;
     }
 
+    TDuration SinceLast(const TTimePoint now) {
+        return now - Last;
+    }
+
     /** false if the transmition is over */
     virtual bool Handle(std::unique_ptr<IPacket>&& packet) = 0;
 
@@ -47,12 +57,13 @@ protected:
     TAddress Address;
     TTransport Transport;
     std::ostream& Error;
+    TTimePoint Last;
 };
 
 class TReadingClientBase : public IClient {
     class TVisitor : public TExpectingPacketVisitorBase {
     public:
-        void VisitRequestPacket(const TRequestPacket& request) {
+        void VisitRequestPacket(const TRequestPacket& request) override {
             BlockID_ = 0;
             if (!std::filesystem::exists(request.Filename())) {
                 SetErrorAnswer(
@@ -61,11 +72,11 @@ class TReadingClientBase : public IClient {
             }
         }
 
-        void VisitAcknowledgePacket(const TAcknowledgePacket& packet) {
+        void VisitAcknowledgePacket(const TAcknowledgePacket& packet) override {
             BlockID_ = packet.BlockID();
         }
 
-        std::uint16_t BlockID() {
+        std::uint16_t BlockID() const {
             return BlockID_;
         }
 
@@ -81,7 +92,11 @@ public:
         , BlockID_(0)
     {}
 
-    bool Handle(std::unique_ptr<IPacket>&& packet) {
+    virtual ~TReadingClientBase() = default;
+
+    bool Handle(std::unique_ptr<IPacket>&& packet) override {
+        Last = std::chrono::steady_clock::now();
+
         TVisitor visitor;
         packet->Accept(&visitor);
 
@@ -132,6 +147,8 @@ public:
         , From_(filename, std::ios::binary)
     {}
 
+    virtual ~TOctetReadingClient() = default;
+
 protected:
     virtual bool Eof() override {
         return From_.eof();
@@ -147,7 +164,7 @@ private:
     std::ifstream From_;
 };
 
-// TODO: Rewrite on FSM NetASCII conversion
+// TODO: Rewrite on DFA NetASCII conversion
 class TNetAsciiReadingClient : public TReadingClientBase {
 public:
     TNetAsciiReadingClient(TAddress&& address,
@@ -182,6 +199,128 @@ private:
     std::size_t Begin_ = 0;
 };
 
+class TWritingClientBase : public IClient {
+    class TVisitor : public TExpectingPacketVisitorBase {
+    public:
+        void VisitRequestPacket(const TRequestPacket&) override {
+            BlockID_ = 0;
+        }
+
+        void VisitDataPacket(const TDataPacket& packet) override {
+            BlockID_ = packet.BlockID();
+            Data_ = packet.Data();
+        }
+
+        std::uint16_t BlockID() const {
+            return BlockID_;
+        }
+
+        const std::string& Data() const {
+            return Data_;
+        }
+    private:
+        std::uint16_t BlockID_;
+        std::string Data_;
+    };
+public:
+
+    TWritingClientBase(TAddress&& address,
+                       TTransport&& transport,
+                       std::ostream& error)
+        : IClient(std::move(address), std::move(transport), error)
+        , BlockID_(0)
+    {}
+
+    virtual ~TWritingClientBase() = default;
+
+    bool Handle(std::unique_ptr<IPacket>&& packet) {
+        Last = std::chrono::steady_clock::now();
+
+        TVisitor visitor;
+        packet->Accept(&visitor);
+
+        if (visitor.ReceivedError()) {
+            Error << "Client: " << visitor.GetReceivedError().Message() << std::endl;
+            return false;
+        }
+
+        if (visitor.AnswerError()) {
+            Error << "Server: " << visitor.GetAnswerError().Message() << std::endl;
+            Transport.Send(Address, &visitor.GetAnswerError());
+            return false;
+        }
+
+        if (BlockID_ != visitor.BlockID()) {
+            // Duplicate
+            return true;
+        }
+
+        Append(visitor.Data());
+
+        TAcknowledgePacket ack(BlockID_);
+        Transport.Send(Address, &ack);
+
+        BlockID_++;
+
+        return BlockID_ == 1 || visitor.Data().length() == 512;
+    }
+
+protected:
+    virtual void Append(const std::string& data) = 0;
+
+private:
+    std::uint16_t BlockID_;
+};
+
+class TOctetWritingClient : public TWritingClientBase {
+public:
+    TOctetWritingClient(TAddress&& address,
+                        TTransport&& transport,
+                        std::ostream& error,
+                        std::string filename)
+        : TWritingClientBase(std::move(address), std::move(transport), error)
+        , Out_(filename, std::ios::binary)
+    {}
+
+    virtual ~TOctetWritingClient() = default;
+
+protected:
+    virtual void Append(const std::string& data) override {
+        Out_.write(data.c_str(), data.length());
+        Out_.flush();
+    }
+
+private:
+    std::ofstream Out_;
+};
+
+// TODO: Rewrite on DFA NetAscii conversion
+class TNetAsciiWritingClient : public TWritingClientBase {
+public:
+    TNetAsciiWritingClient(TAddress&& address,
+                           TTransport&& transport,
+                           std::ostream& error,
+                           std::string filename)
+        : TWritingClientBase(std::move(address), std::move(transport), error)
+        , Filename_(filename)
+    {}
+
+    virtual ~TNetAsciiWritingClient() {
+        std::ofstream out(Filename_, std::ios::binary);
+        std::string toWrite = FromNetASCII(Data_);
+        out.write(toWrite.c_str(), toWrite.length());
+    }
+
+protected:
+    virtual void Append(const std::string& data) override {
+        Data_ += data;
+    }
+
+private:
+    std::string Filename_;
+    std::string Data_;
+};
+
 class TRequestVisitor : public TExpectingPacketVisitorBase {
 public:
     virtual void VisitRequestPacket(const TRequestPacket& packet) override {
@@ -206,7 +345,7 @@ public:
     {}
 
     void SetTimeout(int milliseconds) {
-        Timeout_ = milliseconds;
+        Timeout_ = std::chrono::milliseconds{milliseconds};
     }
 
     void SetLogger(std::shared_ptr<ITransportLogger> logger) {
@@ -243,6 +382,8 @@ public:
                 throw TServerError("Unable to poll");
             }
 
+            TTimePoint pollTime = std::chrono::steady_clock::now();
+
             std::vector<bool> stillAlive(clients.size(), true);
 
             for (std::size_t i = 1; i < clients.size() + 1; i++) {
@@ -255,6 +396,9 @@ public:
                     if (!clients[i - 1]->HandlePacket(std::move(packet.value()))) {
                         stillAlive[i - 1] = false;
                     }
+                } else if (clients[i - 1]->SinceLast(pollTime) > Timeout_) {
+                    errStream << "Server: timeout" << std::endl;
+                    stillAlive[i - 1] = false;
                 }
             }
 
@@ -277,7 +421,7 @@ public:
 
 private:
     std::uint16_t Port_;
-    int Timeout_ = 2000;
+    std::chrono::milliseconds Timeout_{2000};
     std::shared_ptr<ITransportLogger> Logger_;
 
     std::optional<std::unique_ptr<IClient>> AcceptClient(
@@ -323,12 +467,12 @@ private:
 
         std::unique_ptr<IClient> ret;
 
-        switch(visitor.Packet().Type()) {
+        switch (visitor.Packet().Type()) {
         case TRequestPacket::EType::READ:
-            switch(visitor.Packet().Mode()) {
+            switch (visitor.Packet().Mode()) {
             case ETransferMode::OCTET:
                 ret.reset(
-                    new TOctetReadingClient (
+                    new TOctetReadingClient(
                         std::move(packet.From),
                         std::move(answer),
                         error,
@@ -338,7 +482,7 @@ private:
                 break;
             case ETransferMode::NETASCII:
                 ret.reset(
-                    new TNetAsciiReadingClient (
+                    new TNetAsciiReadingClient(
                         std::move(packet.From),
                         std::move(answer),
                         error,
@@ -349,13 +493,27 @@ private:
             break;
 
         case TRequestPacket::EType::WRITE:
-            TErrorPacket err (
-                TErrorPacket::EType::UNDEFINED,
-                "Sorry, unimplemented"
-            );
-            transport.Send(packet.From, &err);
-            error << "Server: sorry, unimplemented" << std::endl;
-            return {};
+            switch (visitor.Packet().Mode()) {
+            case ETransferMode::OCTET:
+                ret.reset(
+                    new TOctetWritingClient(
+                        std::move(packet.From),
+                        std::move(answer),
+                        error,
+                        visitor.Packet().Filename()
+                    )
+                );
+                break;
+            case ETransferMode::NETASCII:
+                ret.reset(
+                    new TNetAsciiWritingClient(
+                        std::move(packet.From),
+                        std::move(answer),
+                        error,
+                        visitor.Packet().Filename()
+                    )
+                );
+            }
         }
 
         std::unique_ptr<IPacket> copy(
