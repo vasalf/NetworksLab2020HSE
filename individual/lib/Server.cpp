@@ -1,5 +1,6 @@
 #include <Server.h>
 #include <Session.h>
+#include <Database.h>
 
 #include <iterator>
 
@@ -75,7 +76,7 @@ private:
     }
 
     void Serve(boost::asio::ip::tcp::socket socket) {
-        Sessions_.emplace_back(std::move(socket), IOContext_);
+        Sessions_.emplace_back(std::move(socket), IOContext_, Database_);
         Sessions_.back().SetEndCallback(
             [this, it = std::prev(Sessions_.end())]() {
                 Sessions_.erase(it);
@@ -88,6 +89,7 @@ private:
     boost::asio::signal_set Signals_;
     boost::asio::ip::tcp::acceptor Acceptor_;
     std::list<TSession> Sessions_;
+    TDatabase Database_;
 };
 
 TServer::TServer()

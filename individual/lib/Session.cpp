@@ -7,11 +7,13 @@ namespace NHttpProxy {
 
 TSession::TSession(
     boost::asio::ip::tcp::socket socket,
-    boost::asio::io_context& context
+    boost::asio::io_context& context,
+    TDatabase& database
 )
     : ClientSocket_(std::move(socket))
     , ForeignSocket_(context)
     , IOContext_(context)
+    , Database_(database)
 {}
 
 void TSession::SetEndCallback(TSessionEndCallback callback) {
@@ -72,16 +74,34 @@ std::pair<std::string, std::string> SplitURL(const std::string& url) {
     }
 }
 
-void LogRequest(const std::string& URL) {
-    std::cout << "[REQ] " << URL << std::endl;
+void LogRequest(const std::string& url) {
+    std::cout << "[REQ]   " << url << std::endl;
+}
+
+void LogResponse(const std::string& url) {
+    std::cout << "[RESP]  " << url << std::endl;
+}
+
+void LogCachedResponse(const std::string& url) {
+    std::cout << "[CACHE] " << url << std::endl;
 }
 
 }
 
 void TSession::WriteForeign() {
     Request_ = RequestParser_.Parsed().Serialize();
-    auto [scheme, host] = SplitURL(RequestParser_.Parsed().RequestLine().URL());
-    LogRequest(RequestParser_.Parsed().RequestLine().URL());
+    std::string url = RequestParser_.Parsed().RequestLine().URL();
+    auto [scheme, host] = SplitURL(url);
+    LogRequest(url);
+
+    auto cached = Database_.ServeCached(url);
+    if (cached.has_value()) {
+        LogCachedResponse(url);
+        Response_ = cached.value().Serialize();
+        WriteClient();
+        return;
+    }
+
     boost::asio::ip::tcp::resolver resolver(IOContext_);
     auto endpoints = resolver.resolve(host, scheme);
     boost::asio::connect(ForeignSocket_, endpoints);
@@ -118,6 +138,9 @@ void TSession::ReadForeign() {
                 ReadForeign();
             } else {
                 ForeignSocket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both);
+                Response_ = ResponseParser_.Parsed().Serialize();
+                LogResponse(RequestParser_.Parsed().RequestLine().URL());
+                Database_.CacheResponse(RequestParser_.Parsed(), ResponseParser_.Parsed());
                 WriteClient();
             }
         }
@@ -125,7 +148,6 @@ void TSession::ReadForeign() {
 }
 
 void TSession::WriteClient() {
-    Response_ = ResponseParser_.Parsed().Serialize();
     boost::asio::async_write(
         ClientSocket_,
         boost::asio::buffer(Response_),

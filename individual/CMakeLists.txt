@@ -8,7 +8,8 @@ find_package(Boost 1.71 REQUIRED)
 add_library(proxy STATIC
     lib/Server.cpp
     lib/Session.cpp
-    lib/HTTP.cpp)
+    lib/HTTP.cpp
+    lib/Database.cpp)
 target_include_directories(proxy PUBLIC lib/)
 target_include_directories(proxy PUBLIC ${Boost_INCLUDE_DIRS})
 target_link_libraries(proxy PUBLIC pthread)

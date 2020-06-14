@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Database.h>
 #include <HTTP.h>
 
 #include <array>
@@ -17,7 +18,8 @@ class TSession {
 public:
     TSession(
         boost::asio::ip::tcp::socket,
-        boost::asio::io_context& context
+        boost::asio::io_context& context,
+        TDatabase& database
     );
 
     TSession(const TSession&) = delete;
@@ -50,6 +52,8 @@ private:
 
     boost::asio::io_context& IOContext_;
     std::optional<TSessionEndCallback> EndCallback_;
+
+    TDatabase& Database_;
 };
 
 }
