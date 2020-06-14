@@ -83,6 +83,8 @@ public:
 
     void Update(const THttpHeader& header);
 
+    void Remove(const std::string& key);
+
 private:
     std::vector<THttpHeader> Headers_;
     mutable std::map<std::string, std::string> Values_;
@@ -139,6 +141,7 @@ public:
 
     const THttpResponseStatusLine& ResponseStatusLine() const;
     const THttpHeaders& Headers() const;
+    THttpHeaders& Headers();
     const std::string& Data() const;
 
     std::string Serialize() const;

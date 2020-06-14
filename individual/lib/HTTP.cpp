@@ -1,5 +1,6 @@
 #include <HTTP.h>
 
+#include <algorithm>
 #include <cassert>
 #include <charconv>
 
@@ -139,6 +140,19 @@ void THttpHeaders::Update(const THttpHeader& header) {
     }
 }
 
+void THttpHeaders::Remove(const std::string& key) {
+    Values_.erase(key);
+    Headers_.erase(
+        std::remove_if(
+            Headers_.begin(),
+            Headers_.end(),
+            [&key](const THttpHeader& header) {
+                return header.Key() == key;
+            }
+        ),
+        Headers_.end()
+    );
+}
 
 std::optional<THttpHeader> THttpHeaders::Find(const std::string& key) const {
     auto it = Values_.find(key);
@@ -203,6 +217,10 @@ const THttpHeaders& THttpResponse::Headers() const {
     return Headers_;
 }
 
+THttpHeaders& THttpResponse::Headers() {
+    return Headers_;
+}
+
 const std::string& THttpResponse::Data() const {
     return Data_;
 }
@@ -246,6 +264,10 @@ public:
         return EParseResult::Await;
     }
 
+    void Reset() {
+        Parsed_.clear();
+    }
+
     const std::string& Parsed() const {
         return Parsed_;
     }
@@ -266,6 +288,7 @@ public:
 
     void SetN(int n) {
         N_ = n;
+        Parsed_.clear();
         Parsed_.reserve(N_);
     }
 
@@ -510,10 +533,24 @@ THttpRequest THttpRequestParser::Parsed() const {
     return Impl_->Parsed();
 }
 
+namespace {
+
+bool IsChunked(const THttpHeaders& headers) {
+    auto mbHeader = headers.Find("Transfer-Encoding");
+    if (!mbHeader.has_value()) {
+        return false;
+    }
+    auto directives = mbHeader.value().SplitValue();
+    return std::find(directives.begin(), directives.end(), "chunked") != directives.end();
+}
+
+}
+
 class THttpResponseParser::TImpl {
 public:
     TImpl()
-        : State_(EState::RESPONSE_LINE)
+        : ChunkLengthParser_("\r\n")
+        , State_(EState::RESPONSE_LINE)
     {}
 
     EParseResult Consume(char c) {
@@ -524,26 +561,59 @@ public:
         } else if (State_ == EState::HEADERS) {
             if (HeadersParser_.Consume(c) == EParseResult::Parsed) {
                 int dataLength = DataLength(HeadersParser_.Parsed());
-                if (dataLength == 0) {
+                bool isChunked = IsChunked(HeadersParser_.Parsed());
+                if (dataLength == 0 && !isChunked) {
                     return EParseResult::Parsed;
                 }
-                State_ = EState::DATA;
-                DataParser_.SetN(dataLength);
+                if (!isChunked) {
+                    State_ = EState::DATA;
+                    DataParser_.SetN(dataLength);
+                } else {
+                    State_ = EState::CHUNK_LENGTH;
+                    Chunked_ = true;
+                }
             }
-        } else {
+        } else if (State_ == EState::DATA) {
             if (DataParser_.Consume(c) == EParseResult::Parsed) {
                 return EParseResult::Parsed;
+            }
+        } else if (State_ == EState::CHUNK_LENGTH) {
+            if (ChunkLengthParser_.Consume(c) == EParseResult::Parsed) {
+                const std::string& lengthStr = ChunkLengthParser_.Parsed();
+                int length;
+                std::from_chars(
+                    lengthStr.c_str(),
+                    lengthStr.c_str() + lengthStr.size(),
+                    length,
+                    16
+                );
+                if (length == 0) {
+                    return EParseResult::Parsed;
+                }
+                State_ = EState::CHUNK_DATA;
+                ChunkParser_.SetN(length + 2);
+                ChunkLengthParser_.Reset();
+            }
+        } else {
+            if (ChunkParser_.Consume(c) == EParseResult::Parsed) {
+                State_ = EState::CHUNK_LENGTH;
+                ChunkedData_ += ChunkParser_.Parsed();
             }
         }
         return EParseResult::Await;
     }
 
     THttpResponse Parsed() const {
-        return THttpResponse(
+        auto ret = THttpResponse(
             ResponseStatusLineParser_.Parsed(),
             HeadersParser_.Parsed(),
-            DataParser_.Parsed()
+            Chunked_ ? ChunkedData_ : DataParser_.Parsed()
         );
+        if (Chunked_) {
+            ret.UpdateContentLength();
+            ret.Headers().Remove("Transfer-Encoding");
+        }
+        return ret;
     }
 
 private:
@@ -551,10 +621,17 @@ private:
     THttpHeadersParser HeadersParser_;
     TNParser DataParser_;
 
+    bool Chunked_ = false;
+    TUntilParser ChunkLengthParser_;
+    TNParser ChunkParser_;
+    std::string ChunkedData_;
+
     enum class EState {
         RESPONSE_LINE,
         HEADERS,
-        DATA
+        DATA,
+        CHUNK_LENGTH,
+        CHUNK_DATA
     };
 
     EState State_;
