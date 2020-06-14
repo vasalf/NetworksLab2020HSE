@@ -189,6 +189,10 @@ const THttpHeaders& THttpRequest::Headers() const {
     return Headers_;
 }
 
+THttpHeaders& THttpRequest::Headers() {
+    return Headers_;
+}
+
 const std::string& THttpRequest::Data() const {
     return Data_;
 }

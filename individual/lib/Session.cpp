@@ -98,8 +98,11 @@ void LogCachedResponse(const std::string& url, bool compressed) {
 }
 
 void TSession::WriteForeign() {
-    Request_ = RequestParser_.Parsed().Serialize();
-    std::string url = RequestParser_.Parsed().RequestLine().URL();
+    auto request = RequestParser_.Parsed();
+    request.Headers().Remove("Accept-Encoding");
+
+    Request_ = request.Serialize();
+    std::string url = request.RequestLine().URL();
     auto [scheme, host] = SplitURL(url);
     LogRequest(url);
 

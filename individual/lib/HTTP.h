@@ -100,6 +100,7 @@ public:
 
     const THttpRequestLine& RequestLine() const;
     const THttpHeaders& Headers() const;
+    THttpHeaders& Headers();
     const std::string& Data() const;
 
     std::string Serialize() const;
