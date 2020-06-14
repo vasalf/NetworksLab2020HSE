@@ -1,4 +1,5 @@
 #include <Session.h>
+#include <Compress.h>
 
 #include <iostream>
 #include <string_view>
@@ -78,12 +79,20 @@ void LogRequest(const std::string& url) {
     std::cout << "[REQ]   " << url << std::endl;
 }
 
-void LogResponse(const std::string& url) {
-    std::cout << "[RESP]  " << url << std::endl;
+void LogResponse(const std::string& url, bool compressed) {
+    std::cout << "[RESP]  " << url;
+    if (compressed) {
+        std::cout << " (gzip)";
+    }
+    std::cout << std::endl;
 }
 
-void LogCachedResponse(const std::string& url) {
-    std::cout << "[CACHE] " << url << std::endl;
+void LogCachedResponse(const std::string& url, bool compressed) {
+    std::cout << "[CACHE] " << url;
+    if (compressed) {
+        std::cout << " (gzip)";
+    }
+    std::cout << std::endl;
 }
 
 }
@@ -96,7 +105,12 @@ void TSession::WriteForeign() {
 
     auto cached = Database_.ServeCached(url);
     if (cached.has_value()) {
-        LogCachedResponse(url);
+        bool compressed = false;
+        if (CompressionSupported(RequestParser_.Parsed())) {
+            Compress(cached.value());
+            compressed = true;
+        }
+        LogCachedResponse(url, compressed);
         Response_ = cached.value().Serialize();
         WriteClient();
         return;
@@ -138,8 +152,14 @@ void TSession::ReadForeign() {
                 ReadForeign();
             } else {
                 ForeignSocket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both);
-                Response_ = ResponseParser_.Parsed().Serialize();
-                LogResponse(RequestParser_.Parsed().RequestLine().URL());
+                auto response = ResponseParser_.Parsed();
+                bool compressed = false;
+                if (CompressionSupported(RequestParser_.Parsed())) {
+                    compressed = true;
+                    Compress(response);
+                }
+                Response_ = response.Serialize();
+                LogResponse(RequestParser_.Parsed().RequestLine().URL(), compressed);
                 Database_.CacheResponse(RequestParser_.Parsed(), ResponseParser_.Parsed());
                 WriteClient();
             }

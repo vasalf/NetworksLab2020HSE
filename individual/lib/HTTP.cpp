@@ -73,6 +73,23 @@ const std::string& THttpHeader::Value() const {
     return Value_;
 }
 
+std::vector<std::string_view> THttpHeader::SplitValue() const {
+    std::vector<std::string_view> ret;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i != Value_.size(); i++) {
+        if (Value_[i] == ' ' || Value_[i] == ',') {
+            if (i > start) {
+                ret.emplace_back(std::string_view(Value_).substr(start, i - start));
+            }
+            start = i + 1;
+        }
+    }
+    if (start < Value_.size()) {
+        ret.emplace_back(std::string_view(Value_).substr(start, Value_.size() - start));
+    }
+    return ret;
+}
+
 std::string THttpHeader::Serialize() const {
     return Key_ + ": " + Value_;
 }
@@ -106,6 +123,31 @@ void THttpHeaders::Append(const THttpHeader& header) {
     if (hint == Values_.end() || hint->first != header.Key()) {
         Values_.emplace_hint(hint, header.Key(), header.Value());
     }
+}
+
+void THttpHeaders::Update(const THttpHeader& header) {
+    auto it = Values_.find(header.Key());
+    if (it == Values_.end()) {
+        Append(header);
+        return;
+    }
+    it->second = header.Value();
+    for (auto& h : Headers_) {
+        if (h.Key() == header.Key()) {
+            h = header;
+        }
+    }
+}
+
+
+std::optional<THttpHeader> THttpHeaders::Find(const std::string& key) const {
+    auto it = Values_.find(key);
+
+    if (it == Values_.end()) {
+        return {};
+    }
+
+    return THttpHeader{it->first, it->second};
 }
 
 std::string THttpHeaders::Serialize() const {
@@ -163,6 +205,10 @@ const THttpHeaders& THttpResponse::Headers() const {
 
 const std::string& THttpResponse::Data() const {
     return Data_;
+}
+
+void THttpResponse::UpdateContentLength() {
+    Headers_.Update({"Content-Length", std::to_string(Data_.size())});
 }
 
 std::string THttpResponse::Serialize() const {

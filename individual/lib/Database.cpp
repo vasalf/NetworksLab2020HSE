@@ -27,32 +27,6 @@ std::optional<THttpResponse> TDatabase::ServeCached(const std::string& url) {
 
 namespace {
 
-std::optional<THttpHeader> CacheControl(const THttpResponse& response) {
-    for (std::size_t i = 0; i != response.Headers().Size(); i++) {
-        if (response.Headers()[i].Key() == "Cache-Control") {
-            return response.Headers()[i];
-        }
-    }
-    return {};
-}
-
-std::vector<std::string_view> CacheControlSplit(const std::string& str) {
-    std::vector<std::string_view> ret;
-    std::size_t start = 0;
-    for (std::size_t i = 0; i != str.size(); i++) {
-        if (str[i] == ' ' || str[i] == ',') {
-            if (i > start) {
-                ret.emplace_back(std::string_view(str).substr(start, i - start));
-            }
-            start = i + 1;
-        }
-    }
-    if (start < str.size()) {
-        ret.emplace_back(std::string_view(str).substr(start, str.size() - start));
-    }
-    return ret;
-}
-
 bool StartsWith(const std::string_view& sv, const std::string& prefix) {
     if (sv.size() < prefix.size())
         return false;
@@ -66,15 +40,14 @@ T ToIntegral(std::string_view sv) {
     return ret;
 }
 
-
 int CacheDuration(const THttpResponse& response) {
-    auto mbHeader = CacheControl(response);
+    auto mbHeader = response.Headers().Find("Cache-Control");
     if (!mbHeader.has_value()) {
         return 0;
     }
     auto header = mbHeader.value();
 
-    auto directives = CacheControlSplit(header.Value());
+    auto directives = header.SplitValue();
     int ret = 0;
     for (const auto& directive : directives) {
         if (directive == "private" || directive == "no-store") {

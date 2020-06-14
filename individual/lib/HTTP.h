@@ -57,6 +57,8 @@ public:
     const std::string& Key() const;
     const std::string& Value() const;
 
+    std::vector<std::string_view> SplitValue() const;
+
     std::string Serialize() const;
 
 private:
@@ -76,6 +78,10 @@ public:
     void Append(const THttpHeader& header);
 
     std::string Serialize() const;
+
+    std::optional<THttpHeader> Find(const std::string& name) const;
+
+    void Update(const THttpHeader& header);
 
 private:
     std::vector<THttpHeader> Headers_;
@@ -136,6 +142,8 @@ public:
     const std::string& Data() const;
 
     std::string Serialize() const;
+
+    void UpdateContentLength();
 
 private:
     THttpResponseStatusLine StatusLine_;
